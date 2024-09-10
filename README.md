@@ -12,13 +12,13 @@ The project focuses on identifying biomarkers from clinicopathological (clinpath
 
 This script handles the QC of clinicopathological data, including filtering, consistency checks, and basic descriptive statistics to ensure data readiness for further analysis.
 
-### 2. Clinpath Analysis
-
-Here, the clinicopathological data is used for exploratory and comparative analysis, identifying associations between clinical features and recurrence risk. This file includes correlation analysis, survival analysis, and risk stratification.
-
-### 3. Transcriptomic QC
+### 2. Transcriptomic QC
 
 This script includes quality control for raw and normalised gene expression data. This stage ensures that only high-quality, normalised data is passed forward for downstream analysis.
+
+### 3. Clinpath Analysis
+
+Here, the clinicopathological data is used for exploratory and comparative analysis, identifying associations between clinical features and recurrence risk. This file includes correlation analysis, survival analysis, and risk stratification.
 
 ### 4. Whole Cohort Analysis
 
