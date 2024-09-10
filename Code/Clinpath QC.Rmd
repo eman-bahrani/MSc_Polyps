@@ -1,0 +1,85 @@
+---
+title: "Clinpath QC"
+author: "Eman AlBahrani"
+date: "2024-09-09"
+output: pdf_document
+---
+
+
+
+# Set up
+
+```{r Libraries}
+# Load libraries
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(gtsummary)
+```
+
+
+```{r Data}
+# Load data
+clinpath <- read.table("../Data/INCISELimitedExportV4-1_Training_M3_n1757.txt", header = TRUE, sep=",")
+
+# View data
+head(clinpath)
+
+```
+
+# Summary Table
+
+```{r Quick Summary}
+
+# Summarise the data using gtsummary
+gtsummary_table <- 
+  clinpath %>%
+  tbl_summary(include = c(Sex, Age, Location, Advanced_index_polyp, size_10mm_plus, HGD_index_polyp, 
+         Adenoma_vs_Serrated, Future_polyp_or_CRC))
+
+# View table
+gtsummary_table
+```
+
+
+# Summary Figures
+
+```{r Histogram - Age}
+# Generate a histogram for age
+ggplot(clinpath, aes(x = Age)) +
+  geom_histogram(binwidth = 5, fill = "#00AFBB", color = "black", alpha = 0.6) +
+  labs(title = "Histogram of Age", x = "Age", y = "Frequency")
+```
+
+
+```{r Boxplot - Age by Sex}
+# Generate boxplot for age by sex
+ggplot(clinpath, aes(x = Sex, y = Age, fill = Sex)) +
+  geom_boxplot() +
+  labs(title = "Boxplot of Age by Sex", x = "Sex", y = "Age") +
+  scale_fill_manual(values = c("#00AFBB", "#FC4E07"))
+
+
+```
+
+```{r Histogram - Location}
+# Visualise location distribution
+ggplot(clinpath, aes(x = Location)) + 
+  geom_bar(fill = "#FC4E07") + 
+  theme_minimal() + 
+  ggtitle("Location Distribution")
+
+
+```
+
+
+```{r Jitterplot - Sex by Location}
+
+# Generate plot of location by sex with data points 
+ggstripchart(clinpath, x = "Sex", y = "Location",
+             color = "Location",
+             palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+             add = "mean_sd")
+
+```

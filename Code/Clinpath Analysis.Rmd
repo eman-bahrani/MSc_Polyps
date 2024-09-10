@@ -1,0 +1,227 @@
+---
+title: "Clinpath Analysis"
+author: "Eman AlBahrani"
+date: "2024-09-09"
+output: pdf_document
+---
+
+# Set up
+
+```{r Libraries}
+# Load necessary libraries
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(flextable)
+library(gtsummary)
+library(stats)
+library(survival)
+library(survminer)
+library(pROC)
+```
+
+
+```{r Data}
+# Read data
+clinpath <- read.table("../Data/INCISELimitedExportV4-1_Training_M3_n1757.txt", header = TRUE, sep=",")
+
+# View data
+head(clinpath)
+
+```
+
+# Analysis
+
+```{r Summary table w p values}
+
+# Create the summary table
+gtsummary_pval <- clinpath %>%
+  select(Sex, Age, Location, Advanced_index_polyp, size_10mm_plus, HGD_index_polyp, 
+         Adenoma_vs_Serrated, Future_polyp_or_CRC) %>%
+  tbl_summary(by = Future_polyp_or_CRC, 
+              statistic = list(all_continuous() ~ "{median} ({p25}, {p75})",
+                               all_categorical() ~ "{n} ({p}%)")) %>%
+  add_p(test = list(all_continuous() ~ "t.test", all_categorical() ~ "chisq.test"))
+
+# Print the summary table
+gtsummary_pval
+
+
+# Export the table to a Word document
+gtsummary_pval %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "../Output/gtsummary_pval.docx")
+
+```
+
+```{r posthoc}
+
+# Run tests to analayse association of variable with sig p
+# Chi square for Sex
+sex_table <- table(clinpath$Sex, clinpath$Future_polyp_or_CRC)
+chisq.test(sex_table)  # Overall chi-square test
+
+# Post-hoc tests for Sex
+pairwise.prop.test(sex_table, p.adjust.method = "bonferroni")
+
+# Chi square for Location
+location_table <- table(clinpath$Location, clinpath$Future_polyp_or_CRC)
+chisq.test(location_table)
+
+# Post-hoc tests for Location
+pairwise.prop.test(location_table, p.adjust.method = "bonferroni")
+```
+# BSG Analysis
+
+## Survival Analysis
+
+```{r Surv_obj}
+# Convert Future_polyp_or_CRC to a binary variable
+clinpath$Future_polyp_or_CRC <- ifelse(clinpath$Future_polyp_or_CRC == "Yes", 1, 0)
+
+# Ensure DaysToOutcomeOrCensor is numeric
+clinpath$DaysToOutcomeOrCensor <- as.numeric(clinpath$DaysToOutcomeOrCensor)
+
+# Convert days to years
+clinpath$YearsToOutcomeOrCensor <- clinpath$DaysToOutcomeOrCensor / 365.25
+
+# Create surv_obj
+surv_obj <- Surv(clinpath$YearsToOutcomeOrCensor, clinpath$Future_polyp_or_CRC)
+```
+
+
+```{r Location HR}
+
+# Run coxph for Location
+loc.coxph <- coxph((surv_obj) ~ Location, method = "efron", data = clinpath)
+loc_summary <- summary(loc.coxph)
+loc_summary
+```
+
+# Adenomas
+
+```{r adenoma\future polyp table}
+
+# Cross tabulation of adenoma and future polyp/crc
+cross_tab_adenoma <- table(clinpath$adenoma, clinpath$Future_polyp_or_CRC)
+print(cross_tab_adenoma)
+# Calculate row percentages
+row_percentages <- prop.table(cross_tab_adenoma, margin = 1) * 100
+
+# Print the cross-tabulation with row percentages
+print(row_percentages)
+
+```
+
+
+# BSG2020
+
+```{r cross - bsg and future}
+# Cross-tabulation of BSG and future polyp/crc
+cross_bsg_future <- table(clinpath$BSG20_risk, clinpath$Future_polyp_or_CRC)
+
+# View cross-tabulation
+cross_bsg_future
+
+# view percentages
+bsg_future_percentage <- prop.table(cross_bsg_future, margin = 1) * 100
+
+# Print the cross-tabulation with row percentages
+print(bsg_future_percentage)
+
+```
+
+
+```{r Future Polyp/BSG stacked bars }
+
+# Visualise the proportions of Low and High risk that developed future polyp/crc as stacked bars
+ggplot(clinpath %>% filter(!is.na(BSG20_risk), !is.na(Future_polyp_or_CRC)), 
+       aes(x = factor(BSG20_risk), fill = factor(Future_polyp_or_CRC))) +
+  geom_bar(position = "fill") +
+  labs(title = "Proportion of Future Polyp/CRC within each BSG20 risk category", 
+       x = "BSG20 Risk", 
+       y = "Proportion") +
+  scale_fill_discrete(name = "Future Polyp/CRC") +
+  theme_minimal()
+
+```
+
+
+
+## KM plots
+
+
+```{r km plot for location}
+
+
+# Fit the Kaplan-Meier survival curve
+fit3 <- survfit(surv_obj ~ BSG20_risk, data = clinpath)
+
+# Plot the Kaplan-Meier survival curve
+ggsurvplot(fit3, pval = TRUE, conf.int = TRUE,
+           risk.table = TRUE, risk.table.col = "strata",
+           linetype = "strata",
+           surv.median.line = "hv",
+           ggtheme = theme_bw(),
+           xlab = "Time (Years)")
+
+```
+
+```{r censored for 3 years}
+# Create a new variable indicating whether the event occurred within 3 years
+clinpath$censored_time <- ifelse(clinpath$YearsToOutcomeOrCensor <= 3, clinpath$YearsToOutcomeOrCensor, 3)
+clinpath$censored_event <- ifelse(clinpath$YearsToOutcomeOrCensor <= 3, clinpath$Future_polyp_or_CRC, 0)
+
+# Fit the Kaplan-Meier survival curve with censored data at 3 years
+fit4 <- survfit(Surv(censored_time, censored_event) ~ BSG20_risk, data = clinpath)
+
+# Plot the Kaplan-Meier survival curve
+ggsurvplot(fit4, pval = TRUE, conf.int = TRUE,
+           risk.table = TRUE, risk.table.col = "strata",
+           linetype = "strata",
+           surv.median.line = "hv",
+           ggtheme = theme_bw(),
+           xlab = "Time (Years)")
+
+```
+
+```{r BSG HR}
+# Calculate the BSG2020 survival hazard ratio
+bsg.coxph <- coxph((surv_obj) ~ BSG20_risk, method = "efron", data = clinpath)
+bsg_summary <- summary(bsg.coxph)
+
+# print
+bsg_summary
+```
+
+## ROC curve
+
+```{r Roc curve}
+# Convert Future_polyp_or_CRC to a factor with levels "No" and "Yes"
+clinpath$Future_polyp_or_CRC <- factor(clinpath$Future_polyp_or_CRC, levels = c("No", "Yes"))
+
+# Convert BSG20_risk to a numeric variable (1 for High_risk, 0 for Low_risk)
+clinpath$BSG20_risk_numeric <- ifelse(clinpath$BSG20_risk == "High_risk", 1, 
+                                      ifelse(clinpath$BSG20_risk == "Low_risk", 0, NA))
+
+# Check for NAs in the numeric risk column
+sum(is.na(clinpath$BSG20_risk_numeric))
+
+# Remove rows with NA values in BSG20_risk_numeric or Future_polyp_or_CRC
+clean_data <- clinpath %>% filter(!is.na(BSG20_risk_numeric) & !is.na(Future_polyp_or_CRC))
+
+# Check the structure of the cleaned data
+str(clean_data)
+
+# Generate the ROC curve
+roc_curve <- roc(clean_data$Future_polyp_or_CRC, clean_data$BSG20_risk_numeric, 
+                 levels = c("No", "Yes"), direction = "<")
+
+# Plot the ROC curve
+plot(roc_curve, col = "blue", lwd = 2, main = "ROC Curve for BSG2020 Risk Score and Future Polyp/CRC")
+
+# Calculate and add AUC to the plot
+auc_value <- auc(roc_curve)
+legend("bottomright", legend = paste("AUC =", round(auc_value, 2)), col = "blue", lwd = 2)
+
+```

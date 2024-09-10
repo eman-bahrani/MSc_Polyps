@@ -1,0 +1,396 @@
+---
+title: "Cohort-Wide Analysis"
+author: "Eman AlBahrani"
+date: "2024-09-09"
+output: pdf_document
+---
+
+# Set up
+
+```{r Libraries}
+
+# Load libraries
+
+library(DESeq2)
+library(tidyverse)
+library(pheatmap)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(msigdbr)
+library(fgsea)
+library(grid)
+library(GSVA)
+library(limma)
+library(tidyr)
+
+```
+
+
+
+```{r Data}
+# Load data
+clinpath <- read.table("../Data/INCISELimitedExportV4-1_Training_M3_n1757.txt", header = TRUE, sep=",")
+
+raw_expr <- read.table("../Data/INCISE_training_M3_raw_April2024.txt", header = TRUE, sep=",")
+
+norm_expr <- read.table("../Data/INCISE_training_M3_normalised_April2024.txt", header = TRUE, sep=",")
+
+
+```
+
+# Prepare datasets
+
+```{r Data Manipulation}
+
+# Reorder Sample IDs
+count_data <- raw_expr %>%
+  arrange(as.numeric(sub("INC", "", Study_ID)))
+
+```
+
+```{r Transposing}
+
+# Transpose everything other than the first column
+names <- count_data[,1]
+count_data_t <- as.data.frame(as.matrix(t(count_data[,-1])))
+
+# Assign first column as the column names of the transposed dataframe
+colnames(count_data_t) <- names
+```
+
+
+```{r Remove NA from clinpath}
+# Remove INC0429 from clinpath
+clinpathNA <- clinpath[rownames(clinpath) != "266", ]
+
+```
+
+
+```{r Remove NA from count data t}
+
+# Remove INC0429 from count_data_t
+
+count_data_t <- count_data_t[, !colnames(count_data_t) %in% "INC0429"]
+
+
+```
+
+# DESeq
+
+```{r Create DDS}
+
+# Ensure the Future_polyp_or_CRC variable is a factor
+clinpath$Future_polyp_or_CRC <- factor(clinpath$Future_polyp_or_CRC, levels = c("No", "Yes"))
+
+# Create the DESeqDataSet object
+dds <- DESeqDataSetFromMatrix(countData = count_data_t, colData = clinpathNA, design = ~ Future_polyp_or_CRC)
+
+
+```
+
+
+```{r Dif Exp}
+# Run the DESeq2 analysis
+dds <- DESeq(dds)
+
+# Extract results for "Yes" vs "No" in Future_polyp_or_CRC
+results <- results(dds, contrast = c("Future_polyp_or_CRC", "Yes", "No"))
+
+# Order results by adjusted p-value
+results <- results[order(results$padj), ]
+
+# View the top differentially expressed genes
+head(results)
+
+```
+
+```{r Saving results}
+# Convert the results object to a data frame
+results_df <- as.data.frame(results)
+
+# Save the results to a CSV file
+write.csv(results_df, file = "DESeq2_results.csv", row.names = TRUE)
+```
+
+## Generate DESeq plots
+
+```{r MA plot}
+
+# Plot MA-plot
+plotMA(results, ylim = c(-2, 2))
+
+
+```
+
+
+```{r Save MA}
+# Save MA-plot as PNG
+png(filename = "../Output/MA_plot.png")
+plotMA(results, ylim = c(-2, 2))
+dev.off()
+```
+
+
+```{r PCA plot}
+
+# Plot PCA
+vsd <- vst(dds, blind = FALSE)
+plotPCA(vsd, intgroup = "Future_polyp_or_CRC")
+
+```
+
+```{r Save PCA}
+# Save PCA plot as PNG
+png(filename = "../Output/PCA_plot.png")
+plotPCA(vsd, intgroup = "Future_polyp_or_CRC")
+dev.off()
+```
+
+```{r Volcano plot}
+# Convert results to data frame
+results_df <- as.data.frame(results)
+
+# Add a column to indicate significant genes
+results_df$significance <- with(results_df, ifelse(padj < 0.05 & abs(log2FoldChange) > 1, "Significant", "Not Significant"))
+
+
+# Save Volcano plot as PNG
+png(filename = "../Output/Volcano_plot.png", width = 800, height = 600)
+
+# Generate the Volcano plot
+ggplot(results_df, aes(x = log2FoldChange, y = -log10(pvalue), color = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("Not Significant" = "grey", "Significant" = "blue")) +
+  theme_minimal() +
+  labs(title = "Volcano plot of Differential Expression",
+       subtitle = "Future polyp or CRC status",
+       x = "Log2 Fold Change",
+       y = "-Log10 p-value",
+       caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
+  theme(legend.position = "right")
+
+# Close the PNG device
+dev.off()
+
+```
+
+# Pairwise GSEA using Hallmarks
+
+```{r hallmark genesets}
+# Get hallmark genesets from msigdb
+hallmarks.df <- msigdbr(species = "Homo sapiens", category = "H")
+
+# Convert to list format
+hallmark_list<- hallmarks.df %>% split(x = .$gene_symbol, f = .$gs_name)
+```
+
+
+```{r Hallmarks plot}
+# Order the results by the stat column
+results_df <- results_df[order(results_df$stat, decreasing = TRUE), ]
+
+# Create a named vector of the stat values
+ranks_whole <- results_df$stat
+names(ranks_whole) <- rownames(results_df)
+
+# Run fgseaRes
+fgseaRes_whole <- fgsea(pathways = hallmark_list,
+                        stats = ranks_whole,
+                        minSize = 15,
+                        maxSize = 500,
+                        nperm = 1000)
+
+# Order the results by NES
+fgseaResTidy_whole <- fgseaRes_whole[order(NES, decreasing = TRUE), ]
+
+# Add NES_colour column
+fgseaResTidy_whole$NES_colour <- "Not_sig"
+fgseaResTidy_whole$NES_colour[fgseaResTidy_whole$NES > 0.5 & fgseaResTidy_whole$padj < 0.05] <- "Sig_up"
+fgseaResTidy_whole$NES_colour[fgseaResTidy_whole$NES < -0.5 & fgseaResTidy_whole$padj < 0.05] <- "Sig_down"
+
+# Define colors
+colours <- c("Sig_up" = "#E58606", "Not_sig" = "darkgrey", "Sig_down" = "#5D69B1")
+
+# Order pathways by NES
+fgseaResTidy_whole$pathway <- factor(fgseaResTidy_whole$pathway, levels = fgseaResTidy_whole$pathway[order(fgseaResTidy_whole$NES)])
+
+# Generate the plot
+ggplot(fgseaResTidy_whole, aes(x = pathway, y = NES, fill = NES_colour)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(x = "Normalised Enrichment Score", title = "Whole Cohort Analysis", subtitle = "  ") +
+  annotate("segment", x = nrow(fgseaResTidy_whole) + 1, y = -0.1, xend = nrow(fgseaResTidy_whole) + 1, yend = min(fgseaResTidy_whole$NES) - 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("segment", x = nrow(fgseaResTidy_whole) + 1, y = 0.1, xend = nrow(fgseaResTidy_whole) + 1, yend = max(fgseaResTidy_whole$NES) + 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("text", x = nrow(fgseaResTidy_whole) + 2, y = min(fgseaResTidy_whole$NES) / 2, label = "No Future Polyp or CRC", fontface = "bold") +
+  annotate("text", x = nrow(fgseaResTidy_whole) + 2, y = max(fgseaResTidy_whole$NES) / 2, label = "Future Polyp or CRC", fontface = "bold") +
+  coord_flip(xlim = c(1, nrow(fgseaResTidy_whole)), clip = "off") +
+  scale_fill_manual(values = colours, limits = names(colours)) +
+  theme(axis.line = element_line(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+        plot.subtitle = element_text(size = 15, hjust = 0.5),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 10, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 15, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 12, colour = "black"),
+        panel.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        strip.background = element_blank())
+
+# Save the plot
+ggsave("../Output/fgsea/Hallmarks_FGSEA_plot_whole_cohort.tiff", units = "mm", width = 220, height = 200, dpi = 400)
+```
+
+Since EMT was the most enriched..
+
+```{r EMT values}
+# Find the row for Epithelial Mesenchymal Transition
+emt_result <- fgseaResTidy_whole[fgseaResTidy_whole$pathway == "EPITHELIAL MESENCHYMAL TRANSITION", ]
+
+# Print the NES and padj values
+print(paste("Epithelial Mesenchymal Transition NES:", emt_result$NES))
+print(paste("Epithelial Mesenchymal Transition padj:", emt_result$padj))
+```
+
+
+```{r EMT enrichment plot}
+# Create the plot
+tiff("../Output/fgsea/EMT_Enrichment_Plot_Whole_Cohort.tiff", units="mm", width=200, height=200, res=800)
+
+plotEnrichment(hallmark_list[["HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION"]], 
+               ranks_whole, 
+               gseaParam = 1, 
+               ticksSize = 0.1) +
+  labs(title="Epithelial Mesenchymal Transition",
+       y = "Enrichment scores") +
+  theme(plot.title = element_text(hjust = 0.5, size = 12), 
+        panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),
+        axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), 
+        axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank())
+
+# Add NES and padj values
+grid.text(label = "NES = -1.93\npadj = 0.03", 
+          gp = gpar(fontsize = 12), 
+          x = unit(0.8, "npc"), 
+          y = unit(0.68, "npc"))
+
+# Add labels for Future Polyp/CRC and No Future Polyp/CRC
+grid.text(label = "Future Polyp/CRC", 
+          gp = gpar(fontsize = 16), 
+          x = unit(0.3, "npc"), 
+          y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC", 
+          gp = gpar(fontsize = 16), 
+          x = unit(0.85, "npc"), 
+          y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+
+# Whole-cohort ssgsea
+
+```{r ssGSEA}
+
+# Convert to matrix
+norm_matrix <- as.matrix(norm_expr)
+
+# Run ssGSEA
+ssgsea_res <- gsva(ssgseaParam(exprData = norm_matrix,
+                               geneSets = hallmarks_list,
+                               minSize = 1,
+                               maxSize = Inf,
+                               alpha = 0.25,
+                               normalize = FALSE))
+```
+
+
+```{r save ssgsea}
+
+# Convert to data frame
+ssgsea_res_df <- as.data.frame(ssgsea_res)
+
+# Save as txt
+write.table(ssgsea_res_df, file = "ssGSEA_Hallmarks_INCISE_training.txt", sep = "\t", row.names = TRUE, col.names = TRUE, quote = FALSE)
+
+
+```
+
+
+```{r Load ssgsea}
+
+# Load results
+ssgsea_results <- read.table(file = "../Data/ssGSEA_Hallmarks_INCISE_training.txt", sep = "\t", header = TRUE)
+
+# Convert rownames to a column
+ssgsea_results <- tibble::rownames_to_column(ssgsea_results, var = "Pathway")
+
+# Assign header to the first column of ssgsea_results
+colnames(ssgsea_results)[1] <- "Pathway"
+```
+
+Visualising EMT NES to ensure significance of finding
+
+```{r Boxplot -  EMT NES}
+
+# Filter ssgsea_results for the EMT pathway
+emt_scores <- ssgsea_results %>%
+  filter(Pathway == "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION") %>%
+  pivot_longer(cols = -Pathway, names_to = "Study.ID", values_to = "NES")
+
+# Merge with clinpathNA to get Future_polyp_or_CRC information
+merged_data <- emt_scores %>%
+  left_join(clinpathNA, by = "Study.ID") %>%
+  filter(!is.na(Future_polyp_or_CRC))  # Remove rows with NA in Future_polyp_or_CRC
+
+# Perform the Wilcoxon test and store the result in a data frame
+stat.test <- compare_means(NES ~ Future_polyp_or_CRC, data = merged_data, 
+                           method = "wilcox.test")
+
+# Modify the result data frame to include the test name in the label
+stat.test <- stat.test%>%
+  mutate(y.position = max(merged_data$NES) + 0.1, 
+         label = paste("Wilcoxon, p =", format.pval(p, digits = 2)))
+
+# Create the base plot with jitter and boxplot
+p <- ggplot(merged_data, aes(x = Future_polyp_or_CRC, y = NES, colour = Future_polyp_or_CRC)) +
+    geom_boxplot(width = 0.5) +  geom_jitter(width = 0.2, alpha = 0.5) + 
+    labs(title = "NES Scores of EMT Pathway - All Samples",
+         x = "Future Polyp or CRC",
+         y = "NES Score") +
+    theme_minimal() +
+    scale_colour_manual(values = c("#F8766D", "#00BFC4"))
+
+# Add stat_pvalue_manual with label
+final_plot <- p + 
+  stat_pvalue_manual(stat.test, label = "label", 
+                     vjust = 0,
+                     bracket.nudge.y = 0.02) +  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)))
+
+
+# Display the plot
+print(final_plot)
+
+# Save the plot to a file
+ggsave(filename = "EMT_NES_all_samples_plot.png", plot = final_plot, width = 8, height = 6, dpi = 300)
+
+# Print summary statistics
+summary_stats <- merged_data %>%
+  group_by(Future_polyp_or_CRC) %>%
+  summarise(
+    n = n(),
+    mean_NES = mean(NES),
+    median_NES = median(NES),
+    sd_NES = sd(NES)
+  )
+print(summary_stats)
+
+```

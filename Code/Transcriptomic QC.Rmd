@@ -1,0 +1,234 @@
+---
+title: "Transcriptomic QC"
+author: "Eman AlBahrani"
+date: "2024-09-09"
+output: pdf_document
+---
+
+
+
+# Set up
+
+```{r Libraries}
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(data.table)
+
+```
+
+```{r Data}
+# Load data
+raw_expr <- read.table("../Data/INCISE_training_M3_raw_April2024.txt", header = TRUE, sep=",")
+
+norm_expr <- read.table("../Data/INCISE_training_M3_normalised_April2024.txt", header = TRUE, sep=",")
+
+```
+
+
+
+# Data Preparation 
+
+```{r Data Manipulation}
+# Remove the first column (Study_ID)
+gene_data <- raw_expr[, -1]  
+
+# Convert the gene data to numeric 
+gene_data <- as.data.frame(lapply(gene_data, as.numeric))
+
+#Remove rows or columns with NA values
+gene_data <- na.omit(gene_data)  # Remove rows with any missing values
+
+```
+
+# Gene Expression (raw_expr)
+
+## Explore the shape of the data
+
+```{r Histogram - Raw Data}
+# Plot histogram of Library Size
+
+# Create Library size variable
+library_size <- rowSums(gene_data)  
+
+# Plot figure
+hist(library_size, 
+     main = "Histogram of Library Sizes", 
+     xlab = "Library Size", 
+     col = "blue", 
+     breaks = 30)
+```
+
+
+```{r Library size Statistics}
+# Get basic statistics for library size
+library_size_summary <- summary(library_size)
+library_size_mean <- mean(library_size)
+library_size_sd <- sd(library_size)
+
+# Print the statistics
+cat("Summary of Library Sizes:\n", library_size_summary, "\n")
+cat("Mean Library Size:", library_size_mean, "\n")
+cat("Standard Deviation of Library Sizes:", library_size_sd, "\n")
+
+```
+
+
+```{r PCA - Raw Data}
+# Perform PCA 
+pca_result <- prcomp(gene_data, scale. = TRUE)
+```
+
+
+```{r Plot PCA - Raw Data}
+
+# Extract the variance explained by PC1 and PC2
+pca_var <- pca_result$sdev^2
+pca_var_explained <- pca_var / sum(pca_var)
+
+# Plot PCA
+pca_df <- as.data.frame(pca_result$x)
+ggplot(pca_df, aes(x = PC1, y = PC2)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(title = "PCA of Gene Expression Data", x = "PC1", y = "PC2") +
+  theme_minimal()
+
+```
+
+```{r Variance}
+
+# Print variance explained by PC1 and PC2
+variance_PC1 <- pca_var_explained[1] * 100  # PC1 variance in percentage
+variance_PC2 <- pca_var_explained[2] * 100  # PC2 variance in percentage
+
+cat("Variance explained by PC1: ", variance_PC1, "%\n")
+cat("Variance explained by PC2: ", variance_PC2, "%\n")
+```
+
+
+```{r Plot PCA w Variance - Raw Data}
+# Extract the variance explained by PC1 and PC2
+pca_var <- pca_result$sdev^2
+pca_var_explained <- pca_var / sum(pca_var)
+
+# Plot PCA
+pca_df <- as.data.frame(pca_result$x)
+ggplot(pca_df, aes(x = PC1, y = PC2)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(title = "PCA of Gene Expression Data") +
+  xlab(paste0("PC1: ", round(pca_var_explained[1] * 100, 2), "% variance")) +
+  ylab(paste0("PC2: ", round(pca_var_explained[2] * 100, 2), "% variance")) +
+  theme_minimal()
+```
+
+
+
+# Normalised data (norm_expr)
+
+## Data Preparation
+
+```{r Data Manipulation}
+# Remove the first column (Gene names)
+norm_gene_data <- norm_expr[, -1]  
+
+# Convert the gene data to numeric 
+norm_gene_data <- as.data.frame(lapply(norm_gene_data, as.numeric))
+
+# Remove rows or columns with NA values
+norm_gene_data <- na.omit(norm_gene_data)  # This will remove rows with any missing values
+
+```
+
+## Explore the shape of the data
+
+```{r Histogram - Norm Data}
+# Histogram of Library Size
+library_size_norm <- rowSums(norm_gene_data)  
+hist(library_size_norm, 
+     main = "Histogram of Library Sizes (Normalised Data)", 
+     xlab = "Library Size", 
+     col = "blue", 
+     breaks = 30)
+
+```
+
+
+```{r Statistics}
+
+# Get basic statistics for library size
+library_size_summary_norm <- summary(library_size_norm)
+library_size_mean_norm <- mean(library_size_norm)
+library_size_sd_norm <- sd(library_size_norm)
+
+# Print the statistics
+cat("Summary of Library Sizes (Normalised Data):\n", library_size_summary_norm, "\n")
+cat("Mean Library Size:", library_size_mean_norm, "\n")
+cat("Standard Deviation of Library Sizes:", library_size_sd_norm, "\n")
+
+```
+
+```{r Data Preparation for PCA}
+# Reorder the columns so that sample IDs starting with INC are in order
+sample_columns <- colnames(norm_expr)[-1]
+ordered_samples <- sample_columns[order(sample_columns)]
+norm_expr <- norm_expr %>%
+  select(1, all_of(ordered_samples))
+
+# Convert to data.table for efficiency
+norm_data_dt <- as.data.table(norm_expr)
+
+# Flatten the data excluding the gene names for histogram
+log2_fold_changes <- unlist(norm_data_dt[, -1, with = FALSE], use.names = FALSE)
+
+# Plot histogram
+ggplot(data.frame(log2_fold_changes), aes(x = log2_fold_changes)) +
+  geom_histogram(binwidth = 0.1, fill = "blue", color = "black") +
+  labs(title = "Histogram of Log2 Fold Changes",
+       x = "Log2 Fold Change",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+```{r PCA - norm data}
+# Perform PCA (Transpose the data so that samples are rows and genes are columns)
+pca_result_norm <- prcomp(norm_gene_data, scale. = TRUE)
+
+# Extract the variance explained by PC1 and PC2
+pca_var_norm <- pca_result_norm$sdev^2
+pca_var_explained_norm <- pca_var_norm / sum(pca_var_norm)
+
+# Plot PCA
+pca_df_norm <- as.data.frame(pca_result_norm$x)
+ggplot(pca_df_norm, aes(x = PC1, y = PC2)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(title = "PCA of Normalised Gene Expression Data", x = "PC1", y = "PC2") +
+  theme_minimal()
+
+# Print variance explained by PC1 and PC2
+variance_PC1_norm <- pca_var_explained_norm[1] * 100  # PC1 variance in percentage
+variance_PC2_norm <- pca_var_explained_norm[2] * 100  # PC2 variance in percentage
+
+cat("Variance explained by PC1 (Normalised Data): ", variance_PC1_norm, "%\n")
+cat("Variance explained by PC2 (Normalised Data): ", variance_PC2_norm, "%\n")
+
+```
+
+```{r PCA w variance - norm data}
+# Perform PCA (Transpose the data so that samples are rows and genes are columns)
+pca_result_norm <- prcomp(norm_gene_data, scale. = TRUE)
+
+# Extract the variance explained by PC1 and PC2
+pca_var_norm <- pca_result_norm$sdev^2
+pca_var_explained_norm <- pca_var_norm / sum(pca_var_norm)
+
+# Plot PCA
+pca_df_norm <- as.data.frame(pca_result_norm$x)
+ggplot(pca_df_norm, aes(x = PC1, y = PC2)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(title = "PCA of Normalised Gene Expression Data") +
+  xlab(paste0("PC1: ", round(pca_var_explained_norm[1] * 100, 2), "% variance")) +
+  ylab(paste0("PC2: ", round(pca_var_explained_norm[2] * 100, 2), "% variance")) +
+  theme_minimal()
+
+```
+

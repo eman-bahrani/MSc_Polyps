@@ -1,0 +1,283 @@
+---
+title: "Extra Figures"
+author: "Eman AlBahrani"
+date: "2024-09-09"
+output: pdf_document
+---
+
+# Clinpath 
+
+```{r Gender}
+
+# Gender distribution
+ggplot(clinpath, aes(x = Sex)) + 
+  geom_bar(fill = "#00AFBB") + 
+  theme_minimal() + 
+  ggtitle("Gender Distribution")
+
+```
+
+
+```{r Location by age jitterplot}
+
+
+ggstripchart(clinpath, x = "Location", y = "Age",
+          color = "Location",
+          palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+          add = "mean_sd")
+
+```
+
+
+
+```{r Location jitterplot}
+
+
+ggstripchart(clinpath, x = "Location", y = "Age",
+          color = "Location",
+          palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+          add = "mean_sd")
+
+```
+
+
+```{r Histogram libraries}
+
+install.packages("devtools")
+library(devtools)
+install_github("easyGgplot2", "kassambara")
+library(easyGgplot2)
+
+
+```
+
+```{r Age histogram}
+
+# change fill and outline color manually 
+ggplot(clinpath, aes(x = Age)) +
+  geom_histogram(aes(color = Sex, fill = Sex), 
+                position = "identity", bins = 30, alpha = 0.4) +
+  scale_color_manual(values = c("#00AFBB", "#E7B800")) +
+  scale_fill_manual(values = c("#00AFBB", "#E7B800"))
+```
+
+
+```{r pie chart adenoma}
+# Prepare a color palette
+myPalette <- terrain.colors(length(category_names))
+
+adenoma_counts <- table(clinpath$adenoma)
+category_counts <- as.vector(adenoma_counts)
+
+category_names <- names(adenoma_counts)
+
+# Create a vector of legend labels
+legend_labels <- paste(category_names, " (", category_counts, ")", sep="")
+
+# Define custom legend labels
+legend_labels <- c(
+  "Hyperplastic",
+  "Hyperplastic with Tubular Components",
+  "Serrated",
+  "Serrated with Tubular Components",
+  "Serrated with Villous Components",
+  "Tubular",
+  "Tubular with Tubulovillous components",
+  "Tubular with Villous components",
+  "Tubulovillous",
+  "Villous",
+  "Villous with Tubulovillous components"
+)
+
+# Create the pie chart
+pie(adenoma_counts, labels = NA, border = "white", col = myPalette,
+    main = "Adenoma Types")
+
+# Position the legend with some space between the pie chart and the legend
+legend("right", legend = legend_labels, cex = 0.7, fill = myPalette, pch = 15,
+       xjust = 1, yjust = 1, inset = c(-0.1, 0)) 
+```
+
+```{r bsg and advanced future polyps}
+# Stacked bar plot to see the relationship between BSG20_risk and Advanced_future_polyp
+ggplot(na.omit(clinpath), aes(x = factor(BSG20_risk), fill = factor(Advanced_future_polyp))) +
+  geom_bar(position = "fill") +
+  labs(title = "Proportion of advanced future_polyp within each BSG20 risk category", x = "BSG20 Risk", y = "Proportion") +
+  scale_fill_discrete(name = "Advanced Future Polyp")
+
+
+```
+
+
+```{r stacked bar - gender and future polyp}
+# Stacked bar plot to see the relationship between Sex and Advanced_future_polyp
+ggplot(na.omit(clinpath), aes(x = factor(Sex), fill = factor(Advanced_future_polyp))) +
+  geom_bar(position = "fill") +
+  labs(title = "Proportion of advanced future polyp within each gender", x = "Gender", y = "Proportion") +
+  scale_fill_discrete(name = "Advanced Future Polyp")
+
+
+```
+
+```{r stacked bar - location and future polyp}
+# Stacked bar plot to see the relationship between Location and Advanced_future_polyp
+ggplot(na.omit(clinpath), aes(x = factor(Location), fill = factor(Advanced_future_polyp))) +
+  geom_bar(position = "fill") +
+  labs(title = "Proportion of advanced future polyp within each Location", x = "Location", y = "Proportion") +
+  scale_fill_discrete(name = "Advanced Future Polyp")
+
+
+```
+
+
+## Univeriate analysis
+
+# Hazard ratio
+
+
+surv_obj <- Surv(clinpath$YearsToOutcomeOrCensor, clinpath$Future_polyp_or_CRC)
+
+
+```{r}
+
+
+# Univariate analysis of each clinical variable and plot
+#Location
+loc.coxph <- coxph((surv_obj) ~ Location, method = "efron", data = clinpath)
+loc_summary <- summary(loc.coxph)
+loc_summary
+loc_coxph<- cox.zph(loc.coxph, transform = "log")
+loc_coxph
+plot(loc_coxph[1,], main = "Location")
+
+
+#BSG2020
+bsg.coxph <- coxph((surv_obj) ~ BSG20_risk, method = "efron", data = clinpath)
+bsg_summary <- summary(bsg.coxph)
+bsg_summary
+bsg_coxph<- cox.zph(bsg.coxph, transform = "log")
+bsg_coxph
+plot(bsg_coxph[1,], main = "BSG20risk")
+
+```
+
+
+# Cohort-Wide Analaysis
+
+#Deseq Heatmap
+```{r DESeq heatmap}
+
+# Heatmap of top differentially expressed genes
+library(pheatmap)
+select <- order(rowMeans(counts(dds, normalized = TRUE)), decreasing = TRUE)[1:20]
+pheatmap(assay(vsd)[select, ], cluster_rows = TRUE, show_rownames = TRUE,
+         cluster_cols = TRUE, annotation_col = as.data.frame(colData(dds)[, "Future_polyp_or_CRC", drop = FALSE]))
+
+
+```
+
+```{r}
+# Save heatmap as PNG
+png(filename = "../Output/Heatmap.png")
+
+# Select top differentially expressed genes by mean normalized count
+select <- order(rowMeans(counts(dds, normalized = TRUE)), decreasing = TRUE)[1:20]
+
+# Generate and save the heatmap
+pheatmap(assay(vsd)[select, ], 
+         cluster_rows = TRUE, 
+         show_rownames = TRUE,
+         cluster_cols = TRUE, 
+         annotation_col = as.data.frame(colData(dds)[, "Future_polyp_or_CRC", drop = FALSE]))
+dev.off()
+```
+
+```{r grouped heatmap}
+
+# Calculate the row means and select the top 20 genes
+select <- order(rowMeans(counts(dds, normalized = TRUE)), decreasing = TRUE)[1:20]
+
+# Get the metadata and sort the samples by Future_polyp_or_CRC
+metadata <- as.data.frame(colData(dds)[, "Future_polyp_or_CRC", drop = FALSE])
+sorted_indices <- order(metadata$Future_polyp_or_CRC)
+
+# Reorder the count matrix and metadata based on the sorted indices
+reordered_counts <- assay(vsd)[select, sorted_indices]
+reordered_metadata <- metadata[sorted_indices, , drop = FALSE]
+
+# Save the heatmap as a PNG file
+png("../Output/grouped_heatmap.png", width = 800, height = 600)
+pheatmap(reordered_counts, cluster_rows = TRUE, show_rownames = TRUE,
+         cluster_cols = FALSE, annotation_col = reordered_metadata)
+dev.off()
+
+```
+
+
+# Cluster Analysis
+
+## Two clusters
+
+## Four clusters
+### fgsea
+
+```{r C2 - Inflammatory response}
+
+tiff("../Output/fgsea/HALLMARK_CLUSTER 2_INFLAMMATORY RESPONSE.tiff", units="mm", width=200, height=200, res=800)
+
+plotEnrichment(hallmark_list [["HALLMARK_INFLAMMATORY_RESPONSE"]],  ranks2, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 2 - HALLMARK INFLAMMATORY RESPONSE") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = \npadj = ", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+```{r C2 - FATTY ACID METABOLISM}
+
+tiff("../Output/fgsea/HALLMARK_CLUSTER 2_FATTY ACID METABOLISM.tiff", units="mm", width=200, height=200, res=800)
+
+plotEnrichment(hallmark_list [["HALLMARK_FATTY_ACID_METABOLISM"]],  ranks2, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 2 - HALLMARK FATTY ACID METABOLISM") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = \npadj = ", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+```{r C3 - FATTY ACID METABOLISM}
+
+tiff("../Output/fgsea/HALLMARK_CLUSTER 3_FATTY ACID METABOLISM.tiff", units="mm", width=200, height=200, res=800)
+
+plotEnrichment(hallmark_list [["HALLMARK_FATTY_ACID_METABOLISM"]],  ranks3, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 3 - HALLMARK FATTY ACID METABOLISM") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = \npadj = ", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+
+```{r C3 - Oxidative Phosphorylation}
+
+tiff("../Output/fgsea/HALLMARK_CLUSTER 3_INFLAMMATORY RESPONSE.tiff", units="mm", width=200, height=200, res=800)
+
+plotEnrichment(hallmark_list [["HALLMARK_INFLAMMATORY_RESPONSE"]],  ranks3, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 3 - HALLMARK INFLAMMATORY RESPONSE") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = \npadj = ", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC?", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```

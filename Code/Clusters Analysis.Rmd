@@ -1,0 +1,1445 @@
+---
+title: "Clusters Analysis"
+author: "Eman AlBahrani"
+date: "2024-09-09"
+output: html_document
+---
+
+# Set up
+
+```{r Libraries}
+
+# Load libraries
+
+library(DESeq2)
+library(tidyverse)
+library(ggplot2)
+library(org.Hs.eg.db) 
+library(pheatmap)
+library(patchwork)
+library(msigdbr)
+library(fgsea)
+library(survival)
+library(survminer)
+library(flextable)
+library(dplyr)
+library(gtsummary)
+library(grid)
+
+```
+
+```{r Data}
+
+# Load data
+clinpath <- read.table("../Data/INCISELimitedExportV4-1_Training_M3_n1757.txt", header = TRUE, sep=",")
+
+raw_expr <- read.table("../Data/INCISE_training_M3_raw_April2024.txt", header = TRUE, sep=",")
+
+norm_expr <- read.table("../Data/INCISE_training_M3_normalised_April2024.txt", header = TRUE, sep=",")
+
+clusters <- read.table("../Data/tSNE_ontology_k4_IDs.txt", header = TRUE, sep=",")
+
+
+```
+
+```{r}
+# Load cleaned data
+count_data_t <- read.table(file = "../Data/count_data_t.txt", sep = "\t", header = TRUE)
+clinpathNA <- read.table(file = "../Data/clinpathNA.txt", sep = "\t", header = TRUE)
+
+
+```
+
+
+# Comparative Analysis b/w clusters
+
+```{r Summary of Cluster Characteristics}
+# Merge the datasets by 'Study.ID'
+clinpath_clusters <- clinpathNA %>%
+  left_join(clusters, by = "Study.ID")
+
+# Select the relevant columns from the merged data
+selected_data <- clinpath_clusters %>%
+  select(Sex, Age, Location, Advanced_index_polyp, size_10mm_plus, HGD_index_polyp, 
+         Adenoma_vs_Serrated, Nrofpolyps_index_scope, adenoma, Future_polyp_or_CRC, DaysToOutcomeOrCensor, BSG20_risk, Advanced_future_polyp, Size_future_10mm_plus, HGD_future_polyp, Adenoma_vs_serr_future_polyp, data_n4) 
+
+# Create summary table grouped by 'data_n4' (Cluster number)
+cluster_summary <- selected_data %>%
+  tbl_summary(
+    by = data_n4,  # Group by the cluster variable
+    statistic = list(
+      all_continuous() ~ "{median} ({p25}, {p75})",  # Median (IQR) for continuous variables
+      all_categorical() ~ "{n} ({p}%)"  # Count (%) for categorical variables
+    )
+  ) %>%
+  add_p(test = list(
+    all_continuous() ~ "kruskal.test",  # Non-parametric for continuous variables
+    all_categorical() ~ "chisq.test"  # Chi-squared test for categorical variables
+  ))
+
+# Print the summary table in R
+print(cluster_summary)
+
+# Export the summary table to a Word document
+cluster_summary %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "../Output/cluster_summary.docx")
+
+
+```
+
+# DESeq
+
+## DESeq - Cluster 1
+
+
+```{r C1 - Subset}
+# Ensure Study.ID columns and column names are characters
+clusters$Study.ID <- as.character(clusters$Study.ID)
+clinpath$Study.ID <- as.character(clinpath$Study.ID)
+colnames(count_data_t) <- as.character(colnames(count_data_t))
+
+# Subset clusters dataframe to get samples belonging to Cluster 1
+cluster_1_samples <- clusters[clusters$data_n4 == 1, "Study.ID"]
+
+# Find and exclude missing samples
+missing_samples <- setdiff(cluster_1_samples, colnames(count_data_t))
+cluster_1_samples <- setdiff(cluster_1_samples, missing_samples)
+
+# Subset clinpath dataframe for Cluster 1 samples
+clinpath_cluster_1 <- clinpath[clinpath$Study.ID %in% cluster_1_samples, ]
+
+# Subset raw expression data for Cluster 1 samples
+raw_expr_cluster_1 <- count_data_t[, cluster_1_samples, drop = FALSE]
+
+```
+
+
+```{r C1 - dds}
+
+# Construct DESeqDataSet
+dds_cluster_1 <- DESeqDataSetFromMatrix(countData = raw_expr_cluster_1, colData = clinpath_cluster_1, design = ~ Future_polyp_or_CRC)
+
+```
+
+
+```{r C1 - DESeq}
+# Run deseq
+dds_cluster_1 <- DESeq(dds_cluster_1)
+
+```
+
+```{r C1 - Results}
+
+# Set contrast
+results_cluster_1 <- results(dds_cluster_1, contrast = c("Future_polyp_or_CRC", "Yes", "No"))
+
+# order by p value
+results_cluster_1 <- results_cluster_1[order(results_cluster_1$padj), ]
+
+```
+
+
+```{r C1 - Plots}
+# MA Plot
+ma_ggplot <- ggplot(as.data.frame(results_cluster_1), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "MA Plot")
+
+# PCA Plot
+vsd_cluster_1 <- vst(dds_cluster_1, blind = FALSE)
+pca_data <- plotPCA(vsd_cluster_1, intgroup = "Future_polyp_or_CRC", returnData = TRUE)
+percentVar <- round(100 * attr(pca_data, "percentVar"))
+pca_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  labs(title = "PCA Plot") +
+  theme_minimal()
+
+# Volcano Plot
+results_df_cluster_1 <- as.data.frame(results_cluster_1)
+results_df_cluster_1$significance <- with(results_df_cluster_1, ifelse(padj < 0.05 & abs(log2FoldChange) > 1, "Significant", "Not Significant"))
+volcano_plot <- ggplot(results_df_cluster_1, aes(x = log2FoldChange, y = -log10(pvalue), color = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("Not Significant" = "grey", "Significant" = "blue")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot",
+       x = "Log2 Fold Change",
+       y = "-Log10 p-value",
+       caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
+  theme(legend.position = "right")
+
+# Combine plots using patchwork
+combined_plot <- (ma_ggplot | pca_plot) /
+                 (volcano_plot)
+
+# Save the combined plot
+ggsave(filename = "../Output/combined_plot_cluster_1.png", plot = combined_plot, width = 16, height = 12)
+
+```
+
+
+
+## DESeq Cluster 2
+
+```{r C2 - Subset}
+# Subset clusters dataframe to get samples belonging to Cluster 2:
+cluster_2_samples <- clusters[clusters$data_n4 == 2, "Study.ID"]
+
+# Subset clinpath dataframe for Cluster 2 samples:
+clinpath_cluster_2 <- clinpath[clinpath$Study.ID %in% cluster_2_samples, ]
+
+# Subset raw expression data for Cluster 2 samples:
+raw_expr_cluster_2 <- count_data_t[, cluster_2_samples]
+
+```
+
+
+```{r C2 - dds}
+
+# Construct DESeqDataSet
+dds_cluster_2 <- DESeqDataSetFromMatrix(countData = raw_expr_cluster_2, colData = clinpath_cluster_2, design = ~ Future_polyp_or_CRC)
+
+```
+
+```{r C2 - DESeq}
+# Run DESeq
+dds_cluster_2 <- DESeq(dds_cluster_2)
+
+```
+
+```{r C2 - Results}
+
+# Set contrast
+results_cluster_2 <- results(dds_cluster_2, contrast = c("Future_polyp_or_CRC", "Yes", "No"))
+
+
+# order by p value
+results_cluster_2 <- results_cluster_2[order(results_cluster_2$padj), ]
+
+```
+
+```{r C2 - Plots}
+
+# MA Plot
+ma_ggplot2 <- ggplot(as.data.frame(results_cluster_2), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "MA Plot - Cluster 2")
+
+# PCA Plot
+vsd_cluster_2 <- vst(dds_cluster_2, blind = FALSE)
+pca_data2 <- plotPCA(vsd_cluster_2, intgroup = "Future_polyp_or_CRC", returnData = TRUE)
+percentVar2 <- round(100 * attr(pca_data2, "percentVar"))
+pca_plot2 <- ggplot(pca_data2, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percentVar2[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar2[2], "% variance")) +
+  labs(title = "PCA Plot - Cluster 2") +
+  theme_minimal()
+
+# Volcano Plot
+results_df_cluster_2 <- as.data.frame(results_cluster_2)
+results_df_cluster_2$significance <- with(results_df_cluster_2, ifelse(padj < 0.05 & abs(log2FoldChange) > 1, "Significant", "Not Significant"))
+volcano_plot2 <- ggplot(results_df_cluster_2, aes(x = log2FoldChange, y = -log10(pvalue), color = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("Not Significant" = "grey", "Significant" = "blue")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot - Cluster 2",
+       x = "Log2 Fold Change",
+       y = "-Log10 p-value",
+       caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
+  theme(legend.position = "right")
+
+# Combine plots using patchwork
+combined_plot <- (ma_ggplot2 | pca_plot2) /
+                 (volcano_plot2)
+
+# Save the combined plot
+ggsave(filename = "../Output/combined_plot_cluster_2.png", plot = combined_plot, width = 16, height = 12)
+```
+
+
+## Deseq Cluster 3
+
+```{r C3 - Subset}
+# Subset clusters dataframe to get samples belonging to Cluster 3:
+cluster_3_samples <- clusters[clusters$data_n4 == 3, "Study.ID"]
+
+# Subset clinpath dataframe for Cluster 3 samples:
+clinpath_cluster_3 <- clinpath[clinpath$Study.ID %in% cluster_3_samples, ]
+
+# Subset raw expression data for Cluster 3 samples:
+raw_expr_cluster_3 <- count_data_t[, cluster_3_samples]
+
+```
+
+```{r C3 - dds}
+
+# Create DESeqDataSet
+dds_cluster_3 <- DESeqDataSetFromMatrix(countData = raw_expr_cluster_3, colData = clinpath_cluster_3, design = ~ Future_polyp_or_CRC)
+
+
+```
+
+
+```{r C3 - DEseq}
+
+# Run DESeq
+dds_cluster_3 <- DESeq(dds_cluster_3)
+
+
+```
+
+```{r C3 - Results}
+
+# Set contrast
+results_cluster_3 <- results(dds_cluster_3, contrast = c("Future_polyp_or_CRC", "Yes", "No"))
+
+# Reorder by padj
+results_cluster_3 <- results_cluster_3[order(results_cluster_3$padj), ]
+
+
+```
+
+
+```{r C3 - Plots}
+
+# MA Plot
+ma_ggplot3 <- ggplot(as.data.frame(results_cluster_3), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "MA Plot - Cluster 3")
+
+# PCA Plot
+vsd_cluster_3 <- vst(dds_cluster_3, blind = FALSE)
+pca_data3 <- plotPCA(vsd_cluster_3, intgroup = "Future_polyp_or_CRC", returnData = TRUE)
+percentVar3 <- round(100 * attr(pca_data3, "percentVar"))
+pca_plot3 <- ggplot(pca_data3, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percentVar3[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar3[2], "% variance")) +
+  labs(title = "PCA Plot - Cluster 3") +
+  theme_minimal()
+
+# Volcano Plot
+results_df_cluster_3 <- as.data.frame(results_cluster_3)
+results_df_cluster_3$significance <- with(results_df_cluster_3, ifelse(padj < 0.05 & abs(log2FoldChange) > 1, "Significant", "Not Significant"))
+volcano_plot3 <- ggplot(results_df_cluster_3, aes(x = log2FoldChange, y = -log10(pvalue), color = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("Not Significant" = "grey", "Significant" = "blue")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot - Cluster 3",
+       x = "Log2 Fold Change",
+       y = "-Log10 p-value",
+       caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
+  theme(legend.position = "right")
+
+# Combine plots using patchwork
+combined_plot3 <- (ma_ggplot3 | pca_plot3) /
+                  (volcano_plot3)
+
+# Save the combined plot
+ggsave(filename = "../Output/replotting_combined_plot_cluster_3.png", plot = combined_plot3, width = 16, height = 12)
+
+```
+
+
+## Deseq Cluster 4
+
+```{r C4 - Subset}
+# Subset clusters dataframe to get samples belonging to Cluster 4:
+cluster_4_samples <- clusters[clusters$data_n4 == 4, "Study.ID"]
+
+# Subset clinpath dataframe for Cluster 4 samples:
+clinpath_cluster_4 <- clinpath[clinpath$Study.ID %in% cluster_4_samples, ]
+
+# Subset raw expression data for Cluster 4 samples:
+raw_expr_cluster_4 <- count_data_t[, cluster_4_samples]
+
+```
+
+```{r C4 - dds}
+
+# Create DESeqDataSet
+dds_cluster_4 <- DESeqDataSetFromMatrix(countData = raw_expr_cluster_4, colData = clinpath_cluster_4, design = ~ Future_polyp_or_CRC)
+
+```
+
+```{r C4 - DESEq}
+
+# Run DESeq
+dds_cluster_4 <- DESeq(dds_cluster_4)
+
+```
+
+```{r C4 - Results}
+
+# Set contrast
+results_cluster_4 <- results(dds_cluster_4, contrast = c("Future_polyp_or_CRC", "Yes", "No"))
+
+# Reorder by padj
+results_cluster_4 <- results_cluster_4[order(results_cluster_4$padj), ]
+
+
+```
+
+
+```{r C4 - Plots}
+# MA Plot
+ma_ggplot4 <- ggplot(as.data.frame(results_cluster_4), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "MA Plot - Cluster 4")
+
+# PCA Plot
+vsd_cluster_4 <- vst(dds_cluster_4, blind = FALSE)
+pca_data4 <- plotPCA(vsd_cluster_4, intgroup = "Future_polyp_or_CRC", returnData = TRUE)
+percentVar4 <- round(100 * attr(pca_data4, "percentVar"))
+pca_plot4 <- ggplot(pca_data4, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC)) +
+  geom_point(size = 3) +
+  xlab(paste0("PC1: ", percentVar4[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar4[2], "% variance")) +
+  labs(title = "PCA Plot - Cluster 4") +
+  theme_minimal()
+
+# Volcano Plot
+results_df_cluster_4 <- as.data.frame(results_cluster_4)
+results_df_cluster_4$significance <- with(results_df_cluster_4, ifelse(padj < 0.05 & abs(log2FoldChange) > 1, "Significant", "Not Significant"))
+volcano_plot4 <- ggplot(results_df_cluster_4, aes(x = log2FoldChange, y = -log10(pvalue), color = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("Not Significant" = "grey", "Significant" = "blue")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot - Cluster 4",
+       x = "Log2 Fold Change",
+       y = "-Log10 p-value",
+       caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
+  theme(legend.position = "right")
+
+# Combine plots using patchwork
+combined_plot4 <- (ma_ggplot4 | pca_plot4) /
+                  (volcano_plot4)
+
+# Save the combined plot
+ggsave(filename = "../Output/replotting_combined_plot_cluster_4.png", plot = combined_plot4, width = 16, height = 12)
+
+```
+
+
+```{r Saving All Results}
+# Save the results to a CSV file
+
+write.csv(as.data.frame(results_cluster_1), file = "../Output/deseq_results_cluster_1.csv")
+write.csv(as.data.frame(results_cluster_2), file = "../Output/deseq_results_cluster_2.csv")
+write.csv(as.data.frame(results_cluster_3), file = "../Output/deseq_results_cluster_3.csv")
+write.csv(as.data.frame(results_cluster_4), file = "../Output/deseq_results_cluster_4.csv")
+
+```
+
+
+
+# Pairwise GSEA
+
+
+```{r Read results}
+# Loading Cluster 1 results
+results_cluster_1 <- read.csv("../Output/deseq_results_cluster_1.csv")
+results_cluster_2 <- read.csv("../Output/deseq_results_cluster_2.csv")
+results_cluster_3 <- read.csv("../Output/deseq_results_cluster_3.csv")
+results_cluster_4 <- read.csv("../Output/deseq_results_cluster_4.csv")
+
+```
+
+
+```{r Load Hallmarks}
+
+
+# Get hallmark genesets from msigdb
+hallmarks.df <- msigdbr(species = "Homo sapiens", category = "H")
+
+# Convert into list format
+hallmark_list <- hallmarks.df %>% split(x = .$gene_symbol, f = .$gs_name)
+
+```
+
+## fgsea - Cluster 1
+
+```{r C1 - fgsea}
+# Order the results by the stat column
+results_cluster_1 <- results_cluster_1[order(results_cluster_1$stat, decreasing = TRUE), ]
+
+# Create a named vector of the stat values
+ranks1 <- results_cluster_1$stat
+names(ranks1) <- rownames(results_cluster_1)
+
+# fgseaRes
+fgseaRes_1 <- fgsea(pathways = hallmark_list, 
+                  stats = ranks1,
+                  minSize = 15,
+                  maxSize = 500,
+                  nperm = 1000)
+
+# Order the results by NES
+fgseaResTidy_1 <- fgseaRes_1[order(NES, decreasing = TRUE), ]
+
+```
+
+```{r C1 - Hallmarks Plot}
+
+# Add NES_colour column
+fgseaResTidy_1$NES_colour <- "Not_sig"
+fgseaResTidy_1$NES_colour[fgseaResTidy_1$NES > 0.5 & fgseaResTidy_1$padj < 0.05] <- "Sig_up"
+fgseaResTidy_1$NES_colour[fgseaResTidy_1$NES < -0.5 & fgseaResTidy_1$padj < 0.05] <- "Sig_down"
+
+# Define colors
+colours <- c("Sig_up" = "#E58606", "Not_sig" = "darkgrey", "Sig_down" = "#5D69B1")
+
+# Order pathways by NES
+fgseaResTidy_1$pathway <- factor(fgseaResTidy_1$pathway, levels = fgseaResTidy_1$pathway[order(fgseaResTidy_1$NES)])
+
+# Create the plot
+ggplot(fgseaResTidy_1, aes(x = pathway, y = NES, fill = NES_colour)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(x = "Normalised Enrichment Score", title = "Cluster 1 of 4", subtitle = "  ") +
+  annotate("segment", x = nrow(fgseaResTidy_1) + 1, y = -0.1, xend = nrow(fgseaResTidy_1) + 1, yend = min(fgseaResTidy_1$NES) - 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("segment", x = nrow(fgseaResTidy_1) + 1, y = 0.1, xend = nrow(fgseaResTidy_1) + 1, yend = max(fgseaResTidy_1$NES) + 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("text", x = nrow(fgseaResTidy_1) + 2, y = min(fgseaResTidy_1$NES) / 2, label = "No Future Polyp or CRC", fontface = "bold") +
+  annotate("text", x = nrow(fgseaResTidy_1) + 2, y = max(fgseaResTidy_1$NES) / 2, label = "Future Polyp or CRC", fontface = "bold") +
+  coord_flip(xlim = c(1, nrow(fgseaResTidy_1)), clip = "off") +
+  scale_fill_manual(values = colours, limits = names(colours)) +
+  theme(axis.line = element_line(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+        plot.subtitle = element_text(size = 15, hjust = 0.5),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 10, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 15, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 12, colour = "black"),
+        panel.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        strip.background = element_blank())
+
+#Save the plot
+ggsave("../Output/fgsea/Hallmarks_FGSEA_plot_Cluster 1 of 4.tiff", units = "mm", width = 220, height = 200, dpi = 400)
+```
+
+## fgsea - Cluster 2
+
+```{r C2 - fgsea}
+# Order the results by the stat column
+results_cluster_2 <- results_cluster_2[order(results_cluster_2$stat, decreasing = TRUE), ]
+
+# Create a named vector of the stat values
+ranks2 <- results_cluster_2$stat
+names(ranks2) <- rownames(results_cluster_2)
+
+# fgseaRes
+fgseaRes_2 <- fgsea(pathways = hallmark_list, 
+                  stats = ranks2,
+                  minSize = 15,
+                  maxSize = 500,
+                  nperm = 1000)
+
+# Order the results by NES
+fgseaResTidy_2 <- fgseaRes_2[order(NES, decreasing = TRUE), ]
+```
+
+
+```{r C2 - Hallmarks Plot}
+
+# Add NES_colour column
+fgseaResTidy_2$NES_colour <- "Not_sig"
+fgseaResTidy_2$NES_colour[fgseaResTidy_2$NES > 0.5 & fgseaResTidy_2$padj < 0.05] <- "Sig_up"
+fgseaResTidy_2$NES_colour[fgseaResTidy_2$NES < -0.5 & fgseaResTidy_2$padj < 0.05] <- "Sig_down"
+
+# Define colors
+colours <- c("Sig_up" = "#E58606", "Not_sig" = "darkgrey", "Sig_down" = "#5D69B1")
+
+# Order pathways by NES
+fgseaResTidy_2$pathway <- factor(fgseaResTidy_2$pathway, levels = fgseaResTidy_2$pathway[order(fgseaResTidy_2$NES)])
+
+# Create the plot
+ggplot(fgseaResTidy_2, aes(x = pathway, y = NES, fill = NES_colour)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(x = "Normalised Enrichment Score", title = "Cluster 2 of 4", subtitle = "  ") +
+  annotate("segment", x = nrow(fgseaResTidy_2) + 1, y = -0.1, xend = nrow(fgseaResTidy_2) + 1, yend = min(fgseaResTidy_2$NES) - 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("segment", x = nrow(fgseaResTidy_2) + 1, y = 0.1, xend = nrow(fgseaResTidy_2) + 1, yend = max(fgseaResTidy_2$NES) + 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("text", x = nrow(fgseaResTidy_2) + 2, y = min(fgseaResTidy_2$NES) / 2, label = "No Future Polyp or CRC", fontface = "bold") +
+  annotate("text", x = nrow(fgseaResTidy_2) + 2, y = max(fgseaResTidy_2$NES) / 2, label = "Future Polyp or CRC", fontface = "bold") +
+  coord_flip(xlim = c(1, nrow(fgseaResTidy_2)), clip = "off") +
+  scale_fill_manual(values = colours, limits = names(colours)) +
+  theme(axis.line = element_line(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+        plot.subtitle = element_text(size = 15, hjust = 0.5),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 10, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 15, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 12, colour = "black"),
+        panel.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        strip.background = element_blank())
+
+# Save the plot
+ggsave("../Output/fgsea/Hallmarks_FGSEA_plot 2 of 4.tiff", units = "mm", width = 220, height = 200, dpi = 400)
+```
+
+
+## fgsea - Cluster 3
+
+```{r C3 - fgsea}
+# Order the results by the stat column
+results_cluster_3 <- results_cluster_3[order(results_cluster_3$stat, decreasing = TRUE), ]
+
+# Create a named vector of the stat values
+ranks3 <- results_cluster_3$stat
+names(ranks3) <- rownames(results_cluster_3)
+
+# fgseaRes
+fgseaRes_3 <- fgsea(pathways = hallmark_list, 
+                  stats = ranks3,
+                  minSize = 15,
+                  maxSize = 500,
+                  nperm = 1000)
+
+# Order the results by NES
+fgseaResTidy_3 <- fgseaRes_3[order(NES, decreasing = TRUE), ]
+
+```
+
+
+```{r C3 - Hallmarks Plot}
+
+# Add NES_colour column
+fgseaResTidy_3$NES_colour <- "Not_sig"
+fgseaResTidy_3$NES_colour[fgseaResTidy_3$NES > 0.5 & fgseaResTidy_3$padj < 0.05] <- "Sig_up"
+fgseaResTidy_3$NES_colour[fgseaResTidy_3$NES < -0.5 & fgseaResTidy_3$padj < 0.05] <- "Sig_down"
+
+# Define colors
+colours <- c("Sig_up" = "#E58606", "Not_sig" = "darkgrey", "Sig_down" = "#5D69B1")
+
+# Order pathways by NES
+fgseaResTidy_3$pathway <- factor(fgseaResTidy_3$pathway, levels = fgseaResTidy_3$pathway[order(fgseaResTidy_3$NES)])
+
+# Create the plot
+ggplot(fgseaResTidy_3, aes(x = pathway, y = NES, fill = NES_colour)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(x = "Normalised Enrichment Score", title = "Cluster 3 of 4", subtitle = "  ") +
+  annotate("segment", x = nrow(fgseaResTidy_3) + 1, y = -0.1, xend = nrow(fgseaResTidy_3) + 1, yend = min(fgseaResTidy_3$NES) - 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("segment", x = nrow(fgseaResTidy_3) + 1, y = 0.1, xend = nrow(fgseaResTidy_3) + 1, yend = max(fgseaResTidy_3$NES) + 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("text", x = nrow(fgseaResTidy_3) + 2, y = min(fgseaResTidy_3$NES) / 2, label = "No Future Polyp or CRC", fontface = "bold") +
+  annotate("text", x = nrow(fgseaResTidy_3) + 2, y = max(fgseaResTidy_3$NES) / 2, label = "Future Polyp or CRC", fontface = "bold") +
+  coord_flip(xlim = c(1, nrow(fgseaResTidy_3)), clip = "off") +
+  scale_fill_manual(values = colours, limits = names(colours)) +
+  theme(axis.line = element_line(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+        plot.subtitle = element_text(size = 15, hjust = 0.5),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 10, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 15, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 12, colour = "black"),
+        panel.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        strip.background = element_blank())
+
+# Save the plot
+ggsave("../Output/fgsea/Hallmarks_FGSEA_plot 3 of 4.tiff", units = "mm", width = 220, height = 200, dpi = 400)
+```
+
+
+## fgsea - Cluster 4
+
+```{r C4 - fgsea}
+# Order the results by the stat column
+results_cluster_4 <- results_cluster_4[order(results_cluster_4$stat, decreasing = TRUE), ]
+
+# Create a named vector of the stat values
+ranks4 <- results_cluster_4$stat
+names(ranks4) <- rownames(results_cluster_4)
+
+# fgseaRes
+fgseaRes_4 <- fgsea(pathways = hallmark_list, 
+                  stats = ranks4,
+                  minSize = 15,
+                  maxSize = 500,
+                  nperm = 1000)
+
+# Order the results by NES
+fgseaResTidy_4 <- fgseaRes_4[order(NES, decreasing = TRUE), ]
+
+```
+
+
+```{r C4 - Hallmarks Plot}
+
+# Add NES_colour column
+fgseaResTidy_4$NES_colour <- "Not_sig"
+fgseaResTidy_4$NES_colour[fgseaResTidy_4$NES > 0.5 & fgseaResTidy_4$padj < 0.05] <- "Sig_up"
+fgseaResTidy_4$NES_colour[fgseaResTidy_4$NES < -0.5 & fgseaResTidy_4$padj < 0.05] <- "Sig_down"
+
+# Define colors
+colours <- c("Sig_up" = "#E58606", "Not_sig" = "darkgrey", "Sig_down" = "#5D69B1")
+
+# Order pathways by NES
+fgseaResTidy_4$pathway <- factor(fgseaResTidy_4$pathway, levels = fgseaResTidy_4$pathway[order(fgseaResTidy_4$NES)])
+
+# Create the plot
+ggplot(fgseaResTidy_4, aes(x = pathway, y = NES, fill = NES_colour)) +
+  geom_bar(stat = 'identity', position = position_dodge()) +
+  labs(x = "Normalised Enrichment Score", title = "Cluster 4 of 4", subtitle = "  ") +
+  annotate("segment", x = nrow(fgseaResTidy_4) + 1, y = -0.1, xend = nrow(fgseaResTidy_4) + 1, yend = min(fgseaResTidy_4$NES) - 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("segment", x = nrow(fgseaResTidy_4) + 1, y = 0.1, xend = nrow(fgseaResTidy_4) + 1, yend = max(fgseaResTidy_4$NES) + 0.5,
+           col = "black", arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  annotate("text", x = nrow(fgseaResTidy_4) + 2, y = min(fgseaResTidy_4$NES) / 2, label = "No Future Polyp or CRC", fontface = "bold") +
+  annotate("text", x = nrow(fgseaResTidy_4) + 2, y = max(fgseaResTidy_4$NES) / 2, label = "Future Polyp or CRC", fontface = "bold") +
+  coord_flip(xlim = c(1, nrow(fgseaResTidy_4)), clip = "off") +
+  scale_fill_manual(values = colours, limits = names(colours)) +
+  theme(axis.line = element_line(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+        plot.subtitle = element_text(size = 15, hjust = 0.5),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 10, colour = "black", face = "bold"),
+        axis.title.x = element_text(size = 15, colour = "black", face = "bold"),
+        axis.text.x = element_text(size = 12, colour = "black"),
+        panel.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        strip.background = element_blank())
+
+# Save the plot
+ggsave("../Output/fgsea/Hallmarks_FGSEA_plot 4 of 4.tiff", units = "mm", width = 220, height = 200, dpi = 400)
+```
+
+
+## Enrichment plots
+
+As OXPHOS was the most enriched..
+
+```{r Exracring OXPHOS}
+
+# OXPHOS
+oxphos_pathway <- "HALLMARK_OXIDATIVE_PHOSPHORYLATION"
+
+# Extract NES and padj for the specific pathway
+find_pathway_2 <- results_cluster_2[results_cluster_2$pathway == oxphos_pathway, ]
+
+# Extract NES and padj
+NES_2_oxphos <- find_pathway_2$NES
+padj_2_oxphos <- find_pathway_2$p.adjust
+```
+
+```{r C1 - Oxidative Phosphorylation}
+
+# Save plot as tiff
+tiff("../Output/fgsea/HALLMARK_CLUSTER 1_OXIDATIVE_PHOSPHORYLATION.tiff", units="mm", width=200, height=200, res=800)
+
+# Generate Enrichment plot
+plotEnrichment(hallmark_list [["HALLMARK_OXIDATIVE_PHOSPHORYLATION"]],  ranks1, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 1 - HALLMARK OXIDATIVE PHOSPHORYLATION") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = -0.99\npadj = 0.67", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "No Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+```{r C2 - Oxidative Phosphorylation}
+
+# Save plot as tiff
+tiff("../Output/fgsea/HALLMARK_CLUSTER 2_OXIDATIVE_PHOSPHORYLATION_Corrected.tiff", units="mm", width=200, height=200, res=800)
+
+# Generate Enrichment plot
+plotEnrichment(hallmark_list [["HALLMARK_OXIDATIVE_PHOSPHORYLATION"]],  ranks2, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 2 - HALLMARK OXIDATIVE PHOSPHORYLATION") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = 1.98\npadj = 0.01", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+
+```{r C3 - Oxidative Phosphorylation}
+
+# Save plot as tiff
+tiff("../Output/fgsea/HALLMARK_CLUSTER 3_OXIDATIVE_PHOSPHORYLATION_corrected.tiff", units="mm", width=200, height=200, res=800)
+
+# Generate Enrichment plot
+plotEnrichment(hallmark_list [["HALLMARK_OXIDATIVE_PHOSPHORYLATION"]],  ranks3, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 3 - HALLMARK OXIDATIVE PHOSPHORYLATION") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = 2.37\npadj = 0.48", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+
+```{r C4 - Oxidative Phosphorylation}
+
+# Save plot as tiff
+tiff("../Output/fgsea/HALLMARK_CLUSTER 4_OXIDATIVE_PHOSPHORYLATION_corrected.tiff", units="mm", width=200, height=200, res=800)
+
+# Generate Enrichment plot
+plotEnrichment(hallmark_list [["HALLMARK_OXIDATIVE_PHOSPHORYLATION"]],  ranks4, gseaParam = 1, ticksSize = 0.1) +labs(title="CLUSTER 4 - HALLMARK OXIDATIVE PHOSPHORYLATION") +labs(y = "Enrichment scores")+
+  theme(plot.title = element_text(hjust = 0.5, size = 12), panel.background = element_blank(), 
+        axis.title.y = element_text(size = 12),axis.text.y = element_text(size = 8),
+        panel.border = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+grid.text(label = "NES = -1.46\npadj = 0.63", gp = gpar(fontsize = 12), x = unit(0.8, "npc"), y = unit(0.68, "npc"))
+grid.text(label = "Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.3, "npc"), y = unit(0.04, "npc"))
+grid.text(label = "No Future Polyp/CRC", gp = gpar(fontsize = 16), x = unit(0.85, "npc"), y = unit(0.04, "npc"))
+
+dev.off()
+```
+
+
+# ssGSEA
+
+```{r Load ssGSEA results}
+
+# Load txt
+ssgsea_results <- read.table(file = "../Data/ssGSEA_Hallmarks_INCISE_training.txt", sep = "\t", header = TRUE)
+
+# Convert rownames to a column
+ssgsea_results <- tibble::rownames_to_column(ssgsea_results, var = "Pathway")
+
+# Assign header to the first column of ssgsea_results
+colnames(ssgsea_results)[1] <- "Pathway"
+
+```
+
+## ssGSEA - Cluster 1
+
+
+```{r subset ssGSEA - cluster 1}
+
+# Subset 'clusters' for cluster 1
+cluster_1_ids <- clusters %>% filter(data_n4 == 1) %>% pull(Study.ID)
+
+# Subset 'ssgsea_results' for cluster 1 Study.IDs
+ssgsea_cluster_1 <- ssgsea_results %>% dplyr::select(c("Pathway", all_of(cluster_1_ids)))
+
+# Filter for the 'HALLMARK_OXIDATIVE_PHOSPHORYLATION' pathway
+ssgsea_cluster_1_filtered <- ssgsea_cluster_1 %>% filter(Pathway == "HALLMARK_OXIDATIVE_PHOSPHORYLATION")
+
+# Convert 'ssgsea_cluster_2_filtered' from wide to long format
+ssgsea_cluster_1_long <- ssgsea_cluster_1_filtered %>%
+  pivot_longer(cols = -Pathway, names_to = "Study.ID", values_to = "NES")
+
+merged_data_cluster_1 <- ssgsea_cluster_1_long %>%
+  left_join(clinpath_cluster_1, by = "Study.ID")
+
+
+```
+
+```{r cluster 1 plot w pvalue}
+# Perform the Wilcoxon test and store the result in a data frame
+stat.test1 <- compare_means(NES ~ Future_polyp_or_CRC, data = merged_data_cluster_1, 
+                           method = "wilcox.test")
+
+# Modify the result data frame to include the test name in the label
+stat.test1 <- stat.test1 %>%
+  mutate(y.position = max(merged_data_cluster_1$NES) + 0.1, 
+         label = paste("Wilcoxon, p =", format.pval(p, digits = 2)))
+
+# Create the base plot with jitter and boxplot
+p1 <- ggplot(merged_data_cluster_1, aes(x = Future_polyp_or_CRC, y = NES, colour = Future_polyp_or_CRC)) +
+    geom_boxplot(width = 0.5) +  # Adjust boxplot width as needed
+    geom_jitter(width = 0.2, alpha = 0.5) + 
+    labs(title = "Cluster 1 - NES Scores of Oxidative Phosphorylation Pathway",
+         x = "Future Polyp or CRC",
+         y = "NES Score") +
+    theme_minimal() +
+    scale_colour_manual(values = c("#F8766D", "#00BFC4"))
+
+# Add stat_pvalue_manual with label
+final_plot <- p1 + 
+  stat_pvalue_manual(stat.test1, label = "label", 
+                     vjust = 0,
+                     bracket.nudge.y = 0.02) +  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)))
+
+# Save the plot to a file
+ggsave(filename = "../Output/cluster_1_NES_plot.png", plot = final_plot, width = 8, height = 6)
+
+```
+
+
+```{r Check Medians}
+# Check the median NES for Future_polyp_or_CRC group "Yes" and "No"
+medians1 <- merged_data_cluster_1 %>%
+  group_by(Future_polyp_or_CRC) %>%
+  summarise(median_NES = median(NES, na.rm = TRUE))
+
+print(medians1)
+```
+
+## ssGSEA - Cluster 2
+
+
+```{r subset ssGSEA - cluster2}
+# Subset 'clusters' for cluster 2
+cluster_2_ids <- clusters %>% filter(data_n4 == 2) %>% pull(Study.ID)
+
+# Subset 'ssgsea_results' for cluster 2 Study.IDs
+ssgsea_cluster_2 <- ssgsea_results %>% dplyr::select(c("Pathway", all_of(cluster_2_ids)))
+
+# Filter for the 'HALLMARK_OXIDATIVE_PHOSPHORYLATION' pathway
+ssgsea_cluster_2_filtered <- ssgsea_cluster_2 %>% filter(Pathway == "HALLMARK_OXIDATIVE_PHOSPHORYLATION")
+
+# Convert 'ssgsea_cluster_2_filtered' from wide to long format
+ssgsea_cluster_2_long <- ssgsea_cluster_2_filtered %>%
+  pivot_longer(cols = -Pathway, names_to = "Study.ID", values_to = "NES")
+
+merged_data_cluster_2 <- ssgsea_cluster_2_long %>%
+  left_join(clinpath_cluster_2, by = "Study.ID")
+
+
+```
+
+
+```{r cluster 2 p value and plot}
+# Perform the Wilcoxon test and store the result in a data frame
+stat.test2 <- compare_means(NES ~ Future_polyp_or_CRC, data = merged_data_cluster_2, 
+                           method = "wilcox.test")
+
+# Modify the result data frame to include the test name in the label
+stat.test2 <- stat.test2 %>%
+  mutate(y.position = max(merged_data_cluster_2$NES) + 0.1, 
+         label = paste("Wilcoxon, p =", format.pval(p, digits = 2)))
+
+# Create the base plot with jitter and boxplot
+p2 <- ggplot(merged_data_cluster_2, aes(x = Future_polyp_or_CRC, y = NES, colour = Future_polyp_or_CRC)) +
+    geom_boxplot(width = 0.5) +  # Adjust boxplot width as needed
+    geom_jitter(width = 0.2, alpha = 0.5) + 
+    labs(title = "Cluster 2 - NES Scores of Oxidative Phosphorylation Pathway",
+         x = "Future Polyp or CRC",
+         y = "NES Score") +
+    theme_minimal() +
+    scale_colour_manual(values = c("#F8766D", "#00BFC4"))
+
+
+# Add stat_pvalue_manual with label
+final_plot2 <- p2 + 
+  stat_pvalue_manual(stat.test2, label = "label", 
+                     vjust = 0,
+                     bracket.nudge.y = 0.02) +  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)))
+
+# Save the plot to a file
+ggsave(filename = "../Output/cluster_2_NES_plot.png", plot = final_plot2, width = 8, height = 6)
+
+```
+
+
+```{r Check medians}
+
+# Check the median NES for Future_polyp_or_CRC group "Yes" and "No"
+medians2 <- merged_data_cluster_2 %>%
+  group_by(Future_polyp_or_CRC) %>%
+  summarise(median_NES = median(NES, na.rm = TRUE))
+
+print(medians2)
+```
+
+
+## ssGSEA - Cluster 3
+
+```{r subset ssGSEA - cluster 3}
+# Subset 'clusters' for cluster 3
+cluster_3_ids <- clusters %>% filter(data_n4 == 3) %>% pull(Study.ID)
+
+# Subset 'ssgsea_results' for cluster 3 Study.IDs
+ssgsea_cluster_3 <- ssgsea_results %>% dplyr::select(c("Pathway", all_of(cluster_3_ids)))
+
+# Filter for the 'HALLMARK_OXIDATIVE_PHOSPHORYLATION' pathway
+ssgsea_cluster_3_filtered <- ssgsea_cluster_3 %>% filter(Pathway == "HALLMARK_OXIDATIVE_PHOSPHORYLATION")
+
+# Convert 'ssgsea_cluster_3_filtered' from wide to long format
+ssgsea_cluster_3_long <- ssgsea_cluster_3_filtered %>%
+  pivot_longer(cols = -Pathway, names_to = "Study.ID", values_to = "NES")
+
+merged_data_cluster_3 <- ssgsea_cluster_3_long %>%
+  left_join(clinpath_cluster_3, by = "Study.ID")
+
+
+```
+
+
+```{r cluster 3 p value and plot}
+# Perform the Wilcoxon test and store the result in a data frame
+stat.test3 <- compare_means(NES ~ Future_polyp_or_CRC, data = merged_data_cluster_3, 
+                           method = "wilcox.test")
+
+# Modify the result data frame to include the test name in the label
+stat.test3 <- stat.test3 %>%
+  mutate(y.position = max(merged_data_cluster_3$NES) + 0.1, 
+         label = paste("Wilcoxon, p =", format.pval(p, digits = 2)))
+
+# Create the base plot with jitter and boxplot
+p3 <- ggplot(merged_data_cluster_3, aes(x = Future_polyp_or_CRC, y = NES, colour = Future_polyp_or_CRC)) +
+    geom_boxplot(width = 0.5) +  # Adjust boxplot width as needed
+    geom_jitter(width = 0.2, alpha = 0.5) + 
+    labs(title = "Cluster 3 - NES Scores of Oxidative Phosphorylation Pathway",
+         x = "Future Polyp or CRC",
+         y = "NES Score") +
+    theme_minimal() +
+    scale_colour_manual(values = c("#F8766D", "#00BFC4"))
+
+
+# Add stat_pvalue_manual with label
+final_plot3 <- p3 + 
+  stat_pvalue_manual(stat.test3, label = "label", 
+                     vjust = 0,
+                     bracket.nudge.y = 0.02) +  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)))
+
+# Save the plot to a file
+ggsave(filename = "../Output/cluster_3_NES_plot.png", plot = final_plot3, width = 8, height = 6)
+
+
+```
+
+
+```{r Check medians}
+
+# Check the median NES for Future_polyp_or_CRC group "Yes" and "No"
+medians3 <- merged_data_cluster_3 %>%
+  group_by(Future_polyp_or_CRC) %>%
+  summarise(median_NES = median(NES, na.rm = TRUE))
+
+print(medians3)
+```
+
+## ssGSEA - Cluster 4
+
+```{r subset ssGSEA - cluster 4}
+
+# Subset 'clusters' for cluster 4
+cluster_4_ids <- clusters %>% filter(data_n4 == 4) %>% pull(Study.ID)
+
+# Subset 'ssgsea_results' for cluster 4 Study.IDs
+ssgsea_cluster_4 <- ssgsea_results %>% dplyr::select(c("Pathway", all_of(cluster_4_ids)))
+
+# Filter for the 'HALLMARK_OXIDATIVE_PHOSPHORYLATION' pathway
+ssgsea_cluster_4_filtered <- ssgsea_cluster_4 %>% filter(Pathway == "HALLMARK_OXIDATIVE_PHOSPHORYLATION")
+
+# Convert 'ssgsea_cluster_4_filtered' from wide to long format
+ssgsea_cluster_4_long <- ssgsea_cluster_4_filtered %>%
+  pivot_longer(cols = -Pathway, names_to = "Study.ID", values_to = "NES")
+
+merged_data_cluster_4 <- ssgsea_cluster_4_long %>%
+  left_join(clinpath_cluster_4, by = "Study.ID")
+
+
+```
+
+```{r cluster 4 p value and plot}
+# Perform the Wilcoxon test and store the result in a data frame
+stat.test4 <- compare_means(NES ~ Future_polyp_or_CRC, data = merged_data_cluster_4, 
+                           method = "wilcox.test")
+
+# Modify the result data frame to include the test name in the label
+stat.test4 <- stat.test4 %>%
+  mutate(y.position = max(merged_data_cluster_4$NES) + 0.1, 
+         label = paste("Wilcoxon, p =", format.pval(p, digits = 2)))
+
+# Create the base plot with jitter and boxplot
+p4 <- ggplot(merged_data_cluster_4, aes(x = Future_polyp_or_CRC, y = NES, colour = Future_polyp_or_CRC)) +
+    geom_boxplot(width = 0.5) +  # Adjust boxplot width as needed
+    geom_jitter(width = 0.2, alpha = 0.5) + 
+    labs(title = "Cluster 4 - NES Scores of Oxidative Phosphorylation Pathway",
+         x = "Future Polyp or CRC",
+         y = "NES Score") +
+    theme_minimal() +
+    scale_colour_manual(values = c("#F8766D", "#00BFC4"))
+
+
+# Add stat_pvalue_manual with label
+final_plot4 <- p4 + 
+  stat_pvalue_manual(stat.test4, label = "label", 
+                     vjust = 0,
+                     bracket.nudge.y = 0.02) +  
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05)))
+
+# Save the plot to a file
+ggsave(filename = "../Output/cluster_4_NES_plot.png", plot = final_plot4, width = 8, height = 6)
+
+
+```
+
+
+```{r Check medians}
+
+# Check the median NES for Future_polyp_or_CRC group "Yes" and "No"
+medians4 <- merged_data_cluster_4 %>%
+  group_by(Future_polyp_or_CRC) %>%
+  summarise(median_NES = median(NES, na.rm = TRUE))
+
+print(medians4)
+```
+
+
+# KM plots
+
+
+
+```{r class}
+
+# Convert future_polyp_or_crc to a factor
+merged_data_cluster_2$Future_polyp_or_CRC <- factor(merged_data_cluster_2$Future_polyp_or_CRC)
+
+# Fit survival object using Cox proportional hazards model
+
+merged_data_cluster_2$DaysToOutcomeOrCensor <- as.numeric(merged_data_cluster_2$DaysToOutcomeOrCensor)
+
+merged_data_cluster_2$YearsToOutcomeOrCensor <- as.numeric(merged_data_cluster_2$DaysToOutcomeOrCensor / 365.25)
+
+```
+
+## cutpoints
+
+```{r C1 - NES KM}
+
+# Convert 'Future_polyp_or_CRC' to a binary status indicator
+merged_data_cluster_1 <- merged_data_cluster_1 %>%
+  mutate(Future_polyp_or_CRC_status = ifelse(Future_polyp_or_CRC == "Yes", 1, 0))
+
+
+
+# Determine the optimal cutpoint for NES scores using surv_cutpoint
+cutpoint1 <- surv_cutpoint(merged_data_cluster_1, time = "YearsToOutcomeOrCensor",
+                          event = "Future_polyp_or_CRC_status", variables = "NES")
+
+
+merged_data_cluster_1 <- surv_categorize(cutpoint1)
+
+# Create a survival object
+surv_object <- Surv(time = merged_data_cluster_1$YearsToOutcomeOrCensor,
+                    event = merged_data_cluster_1$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories
+surv_fit1 <- survfit(surv_object ~ NES, data = merged_data_cluster_1)
+
+km_plot1 <- ggsurvplot(surv_fit1, data = merged_data_cluster_1,
+                      pval = TRUE, conf.int = TRUE,
+                      risk.table = TRUE, 
+                      xlab = "Years to Outcome or Censor",
+                      ylab = "Survival Probability",
+                      title = "Cluster 1 - Kaplan-Meier Curve for Oxidative Phosphorylation Pathway",
+                      legend.title = "NES Category",
+                      legend.labs = c("Low", "High"),
+                      surv.median.line = "hv",
+                      ggtheme = theme_minimal())
+
+# Print plot
+print(km_plot1)
+
+
+```
+
+
+```{r C2 - NES KM}
+
+# Convert 'Future_polyp_or_CRC' to a binary status indicator
+merged_data_cluster_2 <- merged_data_cluster_2 %>%
+  mutate(Future_polyp_or_CRC_status = ifelse(Future_polyp_or_CRC == "Yes", 1, 0))
+
+# Create years to outcome
+merged_data_cluster_2$YearsToOutcomeOrCensor <- as.numeric(merged_data_cluster_2$DaysToOutcomeOrCensor / 365.25)
+
+
+# Determine the optimal cutpoint for NES scores using surv_cutpoint
+cutpoint2 <- surv_cutpoint(merged_data_cluster_2, time = "YearsToOutcomeOrCensor",
+                          event = "Future_polyp_or_CRC_status", variables = "NES")
+
+
+merged_data_cluster_2 <- surv_categorize(cutpoint2)
+
+# Create a survival object
+surv_object <- Surv(time = merged_data_cluster_2$YearsToOutcomeOrCensor,
+                    event = merged_data_cluster_2$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories
+surv_fit <- survfit(surv_object ~ NES, data = merged_data_cluster_2)
+
+km_plot2 <- ggsurvplot(surv_fit, data = merged_data_cluster_2,
+                      pval = TRUE, conf.int = TRUE,
+                      risk.table = TRUE, 
+                      xlab = "Years to Outcome or Censor",
+                      ylab = "Survival Probability",
+                      title = "Cluster 2 - Kaplan-Meier Curve for Oxidative Phosphorylation Pathway",
+                      legend.title = "NES Category",
+                      legend.labs = c("Low", "High"),
+                      surv.median.line = "hv",
+                      ggtheme = theme_minimal())
+
+print(km_plot2)
+
+
+```
+
+
+```{r C3 - NES KM}
+
+# Convert 'Future_polyp_or_CRC' to a binary status indicator
+merged_data_cluster_3 <- merged_data_cluster_3 %>%
+  mutate(Future_polyp_or_CRC_status = ifelse(Future_polyp_or_CRC == "Yes", 1, 0))
+
+# Prepare years to outcome
+merged_data_cluster_3$YearsToOutcomeOrCensor <- as.numeric(merged_data_cluster_3$DaysToOutcomeOrCensor / 365.25)
+
+# Determine the optimal cutpoint for NES scores using surv_cutpoint
+cutpoint3 <- surv_cutpoint(merged_data_cluster_3, time = "YearsToOutcomeOrCensor",
+                          event = "Future_polyp_or_CRC_status", variables = "NES")
+
+
+merged_data_cluster_3 <- surv_categorize(cutpoint3)
+
+# Create a survival object
+surv_object3 <- Surv(time = merged_data_cluster_3$YearsToOutcomeOrCensor,
+                    event = merged_data_cluster_3$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories
+surv_fit3 <- survfit(surv_object3 ~ NES, data = merged_data_cluster_3)
+
+km_plot3 <- ggsurvplot(surv_fit3, data = merged_data_cluster_3,
+                      pval = TRUE, conf.int = TRUE,
+                      risk.table = TRUE, 
+                      xlab = "Years to Outcome or Censor",
+                      ylab = "Survival Probability",
+                      title = "Cluster 3 - Kaplan-Meier Curve for Oxidative Phosphorylation Pathway",
+                      legend.title = "NES Category",
+                      legend.labs = c("Low", "High"),
+                      surv.median.line = "hv",
+                      ggtheme = theme_minimal())
+
+# Print plot
+print(km_plot3)
+
+
+```
+
+
+```{r C4 - NES KM}
+
+# Convert 'Future_polyp_or_CRC' to a binary status indicator
+merged_data_cluster_4 <- merged_data_cluster_4 %>%
+  mutate(Future_polyp_or_CRC_status = ifelse(Future_polyp_or_CRC == "Yes", 1, 0))
+
+# Prepare years to outcome
+merged_data_cluster_4$YearsToOutcomeOrCensor <- as.numeric(merged_data_cluster_4$DaysToOutcomeOrCensor / 365.25)
+
+# Determine the optimal cutpoint for NES scores using surv_cutpoint
+cutpoint4 <- surv_cutpoint(merged_data_cluster_4, time = "YearsToOutcomeOrCensor",
+                          event = "Future_polyp_or_CRC_status", variables = "NES")
+
+
+merged_data_cluster_4 <- surv_categorize(cutpoint4)
+
+# Create a survival object
+surv_object4 <- Surv(time = merged_data_cluster_4$YearsToOutcomeOrCensor,
+                    event = merged_data_cluster_4$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories
+surv_fit4 <- survfit(surv_object4 ~ NES, data = merged_data_cluster_4)
+
+km_plot4 <- ggsurvplot(surv_fit4, data = merged_data_cluster_4,
+                      pval = TRUE, conf.int = TRUE,
+                      risk.table = TRUE, 
+                      xlab = "Years to Outcome or Censor",
+                      ylab = "Survival Probability",
+                      title = "Cluster 4 - Kaplan-Meier Curve for Oxidative Phosphorylation Pathway",
+                      legend.title = "NES Category",
+                      legend.labs = c("Low", "High"),
+                      surv.median.line = "hv",
+                      ggtheme = theme_minimal())
+
+# Print plot
+print(km_plot4)
+
+
+```
+
+
+## Plot top and bottom quartiles
+
+
+```{r C1 - Quartiles KM}
+# Divide NES scores into quartiles for Cluster 1
+merged_data_cluster_1 <- merged_data_cluster_1 %>%
+  dplyr::mutate(NES_quartile = ntile(NES, 4))
+
+# Ensure that 'YearsToOutcomeOrCensor' is numeric in the main dataset
+merged_data_cluster_1 <- merged_data_cluster_1 %>%
+  mutate(YearsToOutcomeOrCensor = as.numeric(DaysToOutcomeOrCensor / 365.25))
+
+# Filter to include only the top (4th) and bottom (1st) quartiles
+top_bottom_quartiles_1 <- merged_data_cluster_1 %>%
+  filter(NES_quartile == 1 | NES_quartile == 4)
+
+# Recode NES_quartile to be more descriptive
+top_bottom_quartiles_1 <- top_bottom_quartiles_1 %>%
+  mutate(NES_category = ifelse(NES_quartile == 1, "Bottom Quartile", "Top Quartile"))
+
+# Explicitly ensure 'YearsToOutcomeOrCensor' is numeric in the filtered data
+top_bottom_quartiles_1 <- top_bottom_quartiles_1 %>%
+  mutate(YearsToOutcomeOrCensor = as.numeric(YearsToOutcomeOrCensor))
+
+# Check if the 'YearsToOutcomeOrCensor' column is numeric
+str(top_bottom_quartiles_1$YearsToOutcomeOrCensor)
+
+# Create a survival object
+surv_object5 <- Surv(time = top_bottom_quartiles_1$YearsToOutcomeOrCensor,
+                     event = top_bottom_quartiles_1$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories (top and bottom quartiles)
+surv_fit5 <- survfit(surv_object5 ~ NES_category, data = top_bottom_quartiles_1)
+
+# Plot the Kaplan-Meier curve
+km_plot5 <- ggsurvplot(surv_fit5, data = top_bottom_quartiles_1,
+                       pval = TRUE, conf.int = TRUE,
+                       risk.table = TRUE, 
+                       xlab = "Years to Outcome or Censor",
+                       ylab = "Survival Probability",
+                       title = "Cluster 1 - Oxidative Phosphorylation Pathway (Top and Bottom Quartiles)",
+                       legend.title = "NES Category",
+                       legend.labs = c("Bottom Quartile", "Top Quartile"),
+                       surv.median.line = "hv",
+                       ggtheme = theme_minimal())
+
+# Print the Kaplan-Meier plot
+print(km_plot5)
+
+```
+
+
+```{r C2 - Quartiles KM}
+# Divide NES scores into quartiles
+merged_data_cluster_2 <- merged_data_cluster_2 %>%
+  dplyr::mutate(NES_quartile = ntile(NES, 4))
+
+# Filter to include only the top (4th) and bottom (1st) quartiles
+top_bottom_quartiles <- merged_data_cluster_2 %>%
+  filter(NES_quartile == 1 | NES_quartile == 4)
+
+# Recode NES_quartile to be more descriptive
+top_bottom_quartiles <- top_bottom_quartiles %>%
+  mutate(NES_category = ifelse(NES_quartile == 1, "Bottom Quartile", "Top Quartile"))
+
+# Create a survival object
+surv_object6 <- Surv(time = top_bottom_quartiles$YearsToOutcomeOrCensor,
+                    event = top_bottom_quartiles$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories (top and bottom quartiles)
+surv_fit6 <- survfit(surv_object6 ~ NES_category, data = top_bottom_quartiles)
+
+# Plot the Kaplan-Meier curve
+km_plot6 <- ggsurvplot(surv_fit6, data = top_bottom_quartiles,
+                      pval = TRUE, conf.int = TRUE,
+                      risk.table = TRUE, 
+                      xlab = "Years to Outcome or Censor",
+                      ylab = "Survival Probability",
+                      title = "Cluster 2 - Oxidative Phosphorylation Pathway(Top and Bottom Quartiles)",
+                      legend.title = "NES Category",
+                      legend.labs = c("Bottom Quartile", "Top Quartile"),
+                      surv.median.line = "hv",
+                      ggtheme = theme_minimal())
+
+print(km_plot6)
+
+```
+
+
+```{r C3 - Quartiles KM}
+
+# Divide NES scores into quartiles for Cluster 3
+merged_data_cluster_3 <- merged_data_cluster_3 %>%
+  dplyr::mutate(NES_quartile_3 = ntile(NES, 4))
+
+# Filter to include only the top (4th) and bottom (1st) quartiles for Cluster 3
+top_bottom_quartiles_3 <- merged_data_cluster_3 %>%
+  filter(NES_quartile_3 == 1 | NES_quartile_3 == 4)
+
+# Recode NES_quartile_3 to be more descriptive for Cluster 3
+top_bottom_quartiles_3 <- top_bottom_quartiles_3 %>%
+  mutate(NES_category_3 = ifelse(NES_quartile_3 == 1, "Bottom Quartile", "Top Quartile"))
+
+# Create a survival object for Cluster 3
+surv_object7 <- Surv(time = top_bottom_quartiles_3$YearsToOutcomeOrCensor,
+                      event = top_bottom_quartiles_3$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories (top and bottom quartiles) for Cluster 3
+surv_fit7 <- survfit(surv_object7 ~ NES_category_3, data = top_bottom_quartiles_3)
+
+# Plot the Kaplan-Meier curve for Cluster 3
+km_plot7 <- ggsurvplot(surv_fit7, data = top_bottom_quartiles_3,
+                        pval = TRUE, conf.int = TRUE,
+                        risk.table = TRUE, 
+                        xlab = "Years to Outcome or Censor",
+                        ylab = "Survival Probability",
+                        title = "Cluster 3 - Oxidative Phosphorylation Pathway (Top and Bottom Quartiles)",
+                        legend.title = "NES Category",
+                        legend.labs = c("Bottom Quartile", "Top Quartile"),
+                        surv.median.line = "hv",
+                        ggtheme = theme_minimal())
+
+# Print the Kaplan-Meier plot for Cluster 3
+print(km_plot7)
+
+```
+
+
+```{r C4 - Quartiles KM}
+# Divide NES scores into quartiles
+merged_data_cluster_4 <- merged_data_cluster_4 %>%
+  dplyr::mutate(NES_quartile = ntile(NES, 4))
+
+# Filter to include only the top (4th) and bottom (1st) quartiles
+top_bottom_quartiles_4 <- merged_data_cluster_4 %>%
+  filter(NES_quartile == 1 | NES_quartile == 4)
+
+# Recode NES_quartile to be more descriptive
+top_bottom_quartiles_4 <- top_bottom_quartiles_4 %>%
+  mutate(NES_category = ifelse(NES_quartile == 1, "Bottom Quartile", "Top Quartile"))
+
+
+
+# Create a survival object
+surv_object8 <- Surv(time = top_bottom_quartiles_4$YearsToOutcomeOrCensor,
+                    event = top_bottom_quartiles_4$Future_polyp_or_CRC_status)
+
+# Fit the survival curve based on NES categories (top and bottom quartiles)
+surv_fit8 <- survfit(surv_object8 ~ NES_category, data = top_bottom_quartiles_4)
+
+# Plot the Kaplan-Meier curve
+km_plot8 <- ggsurvplot(surv_fit8, data = top_bottom_quartiles_4,
+                       pval = TRUE, conf.int = TRUE,
+                       risk.table = TRUE, 
+                       xlab = "Years to Outcome or Censor",
+                       ylab = "Survival Probability",
+                       title = "Cluster 4 - Oxidative Phosphorylation Pathway (Top and Bottom Quartiles)",
+                       legend.title = "NES Category",
+                       legend.labs = c("Bottom Quartile", "Top Quartile"),
+                       surv.median.line = "hv",
+                       ggtheme = theme_minimal())
+
+print(km_plot8)
+```
+
