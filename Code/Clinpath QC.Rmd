@@ -49,28 +49,53 @@ gtsummary_table
 # Generate a histogram for age
 ggplot(clinpath, aes(x = Age)) +
   geom_histogram(binwidth = 5, fill = "#00AFBB", color = "black", alpha = 0.6) +
-  labs(title = "Histogram of Age", x = "Age", y = "Frequency")
+  labs(title = "Histogram of Age", x = "Age", y = "Frequency") +
+  theme(
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text.x = element_text(angle = 0, hjust = 0.5)
+  )
+
+# Save the plot
+ggsave("../Output/age_histogram.png", width = 10, height = 6, dpi = 300)
 ```
 
 
 ```{r Boxplot - Age by Sex}
 # Generate boxplot for age by sex
-ggplot(clinpath, aes(x = Sex, y = Age, fill = Sex)) +
+p1 <- ggplot(clinpath, aes(x = Sex, y = Age, fill = Sex)) +
   geom_boxplot() +
   labs(title = "Boxplot of Age by Sex", x = "Sex", y = "Age") +
-  scale_fill_manual(values = c("#00AFBB", "#FC4E07"))
+  scale_fill_manual(values = c("#00AFBB", "#FC4E07")) +
+  theme(
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12, face = "bold"),
+    legend.title = element_text(size = 14, face = "bold")
+  )
+
+# Save the plot
+ggsave("../Output/age_by_sex_boxplot.png", plot = p1, width = 10, height = 6, dpi = 300)
 
 
 ```
 
 ```{r Histogram - Location}
 # Visualise location distribution
-ggplot(clinpath, aes(x = Location)) + 
+p2 <- ggplot(clinpath, aes(x = Location)) + 
   geom_bar(fill = "#FC4E07") + 
   theme_minimal() + 
-  ggtitle("Location Distribution")
+  ggtitle("Location Distribution") +
+  theme(
+    axis.text = element_text(size = 12, face = "bold"),
+    axis.title = element_text(size = 14, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold")
+    )
 
-
+# Save the plot
+ggsave("../Output/location_distribution.png", plot = p2, width = 10, height = 6, dpi = 300)
 ```
 
 
