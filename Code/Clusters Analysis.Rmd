@@ -139,12 +139,26 @@ results_cluster_1 <- results_cluster_1[order(results_cluster_1$padj), ]
 
 ```
 
+```{r Common theme for legibility}
+# Common theme for all plots
+common_theme <- theme(
+  axis.text = element_text(size = 12, face = "bold"),
+  axis.title = element_text(size = 14, face = "bold"),
+  plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+  legend.text = element_text(size = 12, face = "bold"),
+  legend.title = element_text(size = 14, face = "bold")
+)
+
+```
+
 
 ```{r C1 - Plots}
 # MA Plot
 ma_ggplot <- ggplot(as.data.frame(results_cluster_1), aes(x = baseMean, y = log2FoldChange)) +
   geom_point(alpha = 0.5) +
-  labs(title = "MA Plot")
+  labs(title = "MA Plot", x = "Base Mean", y = "Log2 Fold Change") +
+  common_theme +
+  scale_x_log10()
 
 # PCA Plot
 vsd_cluster_1 <- vst(dds_cluster_1, blind = FALSE)
@@ -155,7 +169,8 @@ pca_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC))
   xlab(paste0("PC1: ", percentVar[1], "% variance")) +
   ylab(paste0("PC2: ", percentVar[2], "% variance")) +
   labs(title = "PCA Plot") +
-  theme_minimal()
+  theme_minimal() +
+  common_theme
 
 # Volcano Plot
 results_df_cluster_1 <- as.data.frame(results_cluster_1)
@@ -168,14 +183,15 @@ volcano_plot <- ggplot(results_df_cluster_1, aes(x = log2FoldChange, y = -log10(
        x = "Log2 Fold Change",
        y = "-Log10 p-value",
        caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
-  theme(legend.position = "right")
+  theme(legend.position = "right") +
+  common_theme
 
-# Combine plots using patchwork
-combined_plot <- (ma_ggplot | pca_plot) /
-                 (volcano_plot)
+# Combine plots using patchwork, stacking them vertically
+combined_plot <- ma_ggplot / pca_plot / volcano_plot +
+  plot_layout(ncol = 1, heights = c(1, 1, 1.2))  # Adjust heights as needed
 
 # Save the combined plot
-ggsave(filename = "../Output/combined_plot_cluster_1.png", plot = combined_plot, width = 16, height = 12)
+ggsave(filename = "../Output/combined_plot_cluster_1.png", plot = combined_plot, width = 12, height = 20, dpi = 300)
 
 ```
 
@@ -225,7 +241,9 @@ results_cluster_2 <- results_cluster_2[order(results_cluster_2$padj), ]
 # MA Plot
 ma_ggplot2 <- ggplot(as.data.frame(results_cluster_2), aes(x = baseMean, y = log2FoldChange)) +
   geom_point(alpha = 0.5) +
-  labs(title = "MA Plot - Cluster 2")
+  labs(title = "MA Plot - Cluster 2", x = "Base Mean", y = "Log2 Fold Change") +
+  scale_x_log10() +
+  common_theme
 
 # PCA Plot
 vsd_cluster_2 <- vst(dds_cluster_2, blind = FALSE)
@@ -236,7 +254,8 @@ pca_plot2 <- ggplot(pca_data2, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC
   xlab(paste0("PC1: ", percentVar2[1], "% variance")) +
   ylab(paste0("PC2: ", percentVar2[2], "% variance")) +
   labs(title = "PCA Plot - Cluster 2") +
-  theme_minimal()
+  theme_minimal() +
+  common_theme
 
 # Volcano Plot
 results_df_cluster_2 <- as.data.frame(results_cluster_2)
@@ -249,14 +268,15 @@ volcano_plot2 <- ggplot(results_df_cluster_2, aes(x = log2FoldChange, y = -log10
        x = "Log2 Fold Change",
        y = "-Log10 p-value",
        caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
-  theme(legend.position = "right")
+  theme(legend.position = "right") +
+  common_theme
 
-# Combine plots using patchwork
-combined_plot <- (ma_ggplot2 | pca_plot2) /
-                 (volcano_plot2)
+# Combine plots using patchwork, stacking them vertically
+combined_plot <- ma_ggplot2 / pca_plot2 / volcano_plot2 +
+  plot_layout(ncol = 1, heights = c(1, 1, 1.2))  # Adjust heights as needed
 
 # Save the combined plot
-ggsave(filename = "../Output/combined_plot_cluster_2.png", plot = combined_plot, width = 16, height = 12)
+ggsave(filename = "../Output/combined_plot_cluster_2.png", plot = combined_plot, width = 12, height = 20, dpi = 300)
 ```
 
 
@@ -308,7 +328,9 @@ results_cluster_3 <- results_cluster_3[order(results_cluster_3$padj), ]
 # MA Plot
 ma_ggplot3 <- ggplot(as.data.frame(results_cluster_3), aes(x = baseMean, y = log2FoldChange)) +
   geom_point(alpha = 0.5) +
-  labs(title = "MA Plot - Cluster 3")
+  labs(title = "MA Plot - Cluster 3", x = "Base Mean", y = "Log2 Fold Change") +
+  scale_x_log10() +
+  common_theme
 
 # PCA Plot
 vsd_cluster_3 <- vst(dds_cluster_3, blind = FALSE)
@@ -319,7 +341,8 @@ pca_plot3 <- ggplot(pca_data3, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC
   xlab(paste0("PC1: ", percentVar3[1], "% variance")) +
   ylab(paste0("PC2: ", percentVar3[2], "% variance")) +
   labs(title = "PCA Plot - Cluster 3") +
-  theme_minimal()
+  theme_minimal() +
+  common_theme
 
 # Volcano Plot
 results_df_cluster_3 <- as.data.frame(results_cluster_3)
@@ -332,15 +355,15 @@ volcano_plot3 <- ggplot(results_df_cluster_3, aes(x = log2FoldChange, y = -log10
        x = "Log2 Fold Change",
        y = "-Log10 p-value",
        caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
-  theme(legend.position = "right")
+  theme(legend.position = "right") +
+  common_theme
 
-# Combine plots using patchwork
-combined_plot3 <- (ma_ggplot3 | pca_plot3) /
-                  (volcano_plot3)
+# Combine plots using patchwork, stacking them vertically
+combined_plot3 <- ma_ggplot3 / pca_plot3 / volcano_plot3 +
+  plot_layout(ncol = 1, heights = c(1, 1, 1.2))  # Adjust heights as needed
 
 # Save the combined plot
-ggsave(filename = "../Output/replotting_combined_plot_cluster_3.png", plot = combined_plot3, width = 16, height = 12)
-
+ggsave(filename = "../Output/replotting_combined_plot_cluster_3.png", plot = combined_plot3, width = 12, height = 20, dpi = 300)
 ```
 
 
@@ -388,7 +411,9 @@ results_cluster_4 <- results_cluster_4[order(results_cluster_4$padj), ]
 # MA Plot
 ma_ggplot4 <- ggplot(as.data.frame(results_cluster_4), aes(x = baseMean, y = log2FoldChange)) +
   geom_point(alpha = 0.5) +
-  labs(title = "MA Plot - Cluster 4")
+  labs(title = "MA Plot - Cluster 4", x = "Base Mean", y = "Log2 Fold Change") +
+  scale_x_log10() +
+  common_theme
 
 # PCA Plot
 vsd_cluster_4 <- vst(dds_cluster_4, blind = FALSE)
@@ -399,7 +424,8 @@ pca_plot4 <- ggplot(pca_data4, aes(x = PC1, y = PC2, color = Future_polyp_or_CRC
   xlab(paste0("PC1: ", percentVar4[1], "% variance")) +
   ylab(paste0("PC2: ", percentVar4[2], "% variance")) +
   labs(title = "PCA Plot - Cluster 4") +
-  theme_minimal()
+  theme_minimal() +
+  common_theme
 
 # Volcano Plot
 results_df_cluster_4 <- as.data.frame(results_cluster_4)
@@ -412,15 +438,15 @@ volcano_plot4 <- ggplot(results_df_cluster_4, aes(x = log2FoldChange, y = -log10
        x = "Log2 Fold Change",
        y = "-Log10 p-value",
        caption = "Significance: padj < 0.05 and |log2FoldChange| > 1") +
-  theme(legend.position = "right")
+  theme(legend.position = "right") +
+  common_theme
 
-# Combine plots using patchwork
-combined_plot4 <- (ma_ggplot4 | pca_plot4) /
-                  (volcano_plot4)
+# Combine plots using patchwork, stacking them vertically
+combined_plot4 <- ma_ggplot4 / pca_plot4 / volcano_plot4 +
+  plot_layout(ncol = 1, heights = c(1, 1, 1.2))  # Adjust heights as needed
 
 # Save the combined plot
-ggsave(filename = "../Output/replotting_combined_plot_cluster_4.png", plot = combined_plot4, width = 16, height = 12)
-
+ggsave(filename = "../Output/replotting_combined_plot_cluster_4.png", plot = combined_plot4, width = 12, height = 20, dpi = 300)
 ```
 
 
